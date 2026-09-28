@@ -25,6 +25,64 @@
 
 [hidden] { display: none !important; }
 
+/* Eco mode stops the render loop. Hide the retained WebGL frame as well, so
+   the paused scene cannot be mistaken for a frozen application. */
+html.xra-eco-mode #SLX,
+html.xra-eco-mode #SL {
+  visibility: hidden !important;
+  opacity: 0 !important;
+}
+
+.xra-eco-curtain {
+  position: fixed;
+  inset: 0;
+  z-index: 9000;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background:
+    radial-gradient(circle at 50% 42%, rgba(30, 80, 64, .22), transparent 38%),
+    #080b0d;
+  color: #f5f7f6;
+  pointer-events: none;
+}
+
+.xra-eco-curtain-card {
+  display: grid;
+  justify-items: center;
+  gap: 8px;
+  width: min(430px, calc(100vw - 48px));
+  padding: 22px 26px;
+  border: 1px solid rgba(110, 231, 183, .28);
+  border-radius: 14px;
+  background: rgba(11, 22, 20, .94);
+  box-shadow: 0 18px 55px rgba(0, 0, 0, .52);
+  text-align: center;
+  font: 13px/1.45 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.xra-eco-curtain-icon { font-size: 28px; line-height: 1; }
+.xra-eco-curtain-card strong { font-size: 16px; }
+.xra-eco-curtain-card span { color: rgba(255, 255, 255, .72); }
+
+/* The mocap preview is an independent 2D canvas: keep it over the WebGL
+   scene so enabling the 3D renderer cannot bury the diagnostic wireframe. */
+#XRA_MOCAP_WIREFRAME_LAYER {
+  position: fixed;
+  inset: 0;
+  z-index: 900000;
+  pointer-events: none;
+  overflow: hidden;
+  isolation: isolate;
+  contain: layout style paint;
+}
+
+.xra-mocap-wireframe-front {
+  position: absolute !important;
+  z-index: 1 !important;
+  pointer-events: none !important;
+}
+
 /* ============================================================
    RIGHT — custom controls. Header is intentionally transparent:
    no black rectangle behind HANDS / hide button.

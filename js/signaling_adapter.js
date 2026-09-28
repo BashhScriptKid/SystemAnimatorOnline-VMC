@@ -153,6 +153,8 @@
       this.callbacks = callbacks;
       this.pc = null;
       this.dataChannel = null;
+      this.realtimeChannel = null;
+      this.realtimeChannelNegotiated = false;
       this.relay = null;
       this.sub = null;
       this.aesKey = null;
@@ -532,9 +534,15 @@
     async _initiatePeerConnection() {
       const pc = this._createPeerConnection();
 
-      // Create data channel
+      // Reliable ordered channel for chat, session control and sync markers.
       const dc = pc.createDataChannel('xra-p2p-channel', { ordered: true });
       this._bindDataChannel(dc);
+      // Latest-only motion frames must never queue behind stale frames.
+      const realtime = pc.createDataChannel('xra-avatar-realtime', {
+        ordered: false,
+        maxRetransmits: 0
+      });
+      this._bindRealtimeChannel(realtime);
 
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
@@ -561,7 +569,11 @@
       const pc = this._createPeerConnection();
 
       pc.ondatachannel = event => {
-        this._bindDataChannel(event.channel);
+        if (event.channel?.label === 'xra-avatar-realtime') {
+          this._bindRealtimeChannel(event.channel);
+        } else {
+          this._bindDataChannel(event.channel);
+        }
       };
 
       await pc.setRemoteDescription(new RTCSessionDescription({ type: 'offer', sdp }));
@@ -607,6 +619,24 @@
       };
     }
 
+    _bindRealtimeChannel(dc) {
+      this.realtimeChannelNegotiated = true;
+      this.realtimeChannel = dc;
+      dc.onmessage = event => {
+        let data = event.data;
+        try {
+          data = JSON.parse(event.data);
+        } catch (_) {}
+        this.callbacks.onData?.(data);
+      };
+      dc.onclose = () => {
+        if (this.realtimeChannel === dc) this.realtimeChannel = null;
+      };
+      dc.onerror = err => {
+        console.warn('[NostrSignalingAdapter] realtime channel', err);
+      };
+    }
+
     _closeRelayConnection() {
       this._clearTimers();
       if (this.sub) {
@@ -622,8 +652,26 @@
     send(payload) {
       if (!this.dataChannel || this.dataChannel.readyState !== 'open') return false;
       const str = typeof payload === 'string' ? payload : JSON.stringify(payload);
-      this.dataChannel.send(str);
-      return true;
+      try {
+        this.dataChannel.send(str);
+        return true;
+      } catch (_) {
+        return false;
+      }
+    }
+
+    sendRealtime(payload) {
+      const channel = this.realtimeChannel;
+      if (!channel || channel.readyState !== 'open' || channel.bufferedAmount > 128 * 1024) {
+        return false;
+      }
+      const data = typeof payload === 'string' ? payload : JSON.stringify(payload);
+      try {
+        channel.send(data);
+        return true;
+      } catch (_) {
+        return false;
+      }
     }
 
     async _replaceLocalTrack(kind, track, stream) {
@@ -673,6 +721,11 @@
         try { this.dataChannel.close(); } catch (_) {}
         this.dataChannel = null;
       }
+      if (this.realtimeChannel) {
+        try { this.realtimeChannel.close(); } catch (_) {}
+        this.realtimeChannel = null;
+      }
+      this.realtimeChannelNegotiated = false;
       if (this.pc) {
         try { this.pc.close(); } catch (_) {}
         this.pc = null;

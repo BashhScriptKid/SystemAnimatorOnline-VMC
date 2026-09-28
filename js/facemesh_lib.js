@@ -249,6 +249,7 @@ var use_SIMD;
 var use_faceLandmarksDetection, use_human_facemesh, use_mediapipe_facemesh, use_mediapipe_face_landmarker, facemesh_version;
 
 var canvas, context, RAF_timerID;
+var pending_draw_faces, pending_draw_w, pending_draw_h;
 
 var model;
 var face_cover;
@@ -871,12 +872,22 @@ function is_wireframe_visible() {
 function draw(faces, w,h, options) {
   if (!is_wireframe_visible()) return;
   if (canvas && options.draw_canvas) {
-    if (RAF_timerID)
-      cancelAnimationFrame(RAF_timerID)
+    // Keep the newest sample, but never cancel a frame which is already
+    // queued. Under a busy GPU/WebGL compositor, repeated worker packets could
+    // otherwise cancel every RAF before it ran, making the preview freeze or
+    // advance in large jumps even though mocap itself remained live.
+    pending_draw_faces = faces;
+    pending_draw_w = w;
+    pending_draw_h = h;
+    if (RAF_timerID) return;
     RAF_timerID = requestAnimationFrame(function () {
       RAF_timerID = null
       if (!is_wireframe_visible()) return;
-      draw_facemesh(faces, w,h);
+      const latest_faces = pending_draw_faces || [];
+      const latest_w = pending_draw_w;
+      const latest_h = pending_draw_h;
+      pending_draw_faces = null;
+      draw_facemesh(latest_faces, latest_w,latest_h);
       draw_pose();
     });
   }
@@ -937,13 +948,23 @@ return Math.sqrt(Math.pow(a[0]-b[0],2) + Math.pow(a[1]-b[1],2))
   context.strokeStyle = '#32EEDB';
   context.lineWidth = 0.5;
   const keypoints = faces[0].scaledMesh;
+  // Submit the complete 880-triangle face mesh as one Canvas2D path.  The old
+  // code allocated one Path2D and issued one stroke() per triangle, which made
+  // GPU-accelerated Canvas2D/compositing process ~21k draw calls per second at
+  // 24 FPS and could starve the WebGL scene compositor entirely.
+  const meshPath = new Path2D();
   for (let i = 0, i_max=TRIANGULATION.length/3; i < i_max; i++) {
-    const points = [
-TRIANGULATION[i * 3], TRIANGULATION[i * 3 + 1],
-TRIANGULATION[i * 3 + 2]
-    ].map(index => keypoints[index]);
-    drawPath(context, points, true);
+    const offset = i * 3;
+    const p0 = keypoints[TRIANGULATION[offset]];
+    const p1 = keypoints[TRIANGULATION[offset + 1]];
+    const p2 = keypoints[TRIANGULATION[offset + 2]];
+    if (!p0 || !p1 || !p2) continue;
+    meshPath.moveTo(p0[0]/2, p0[1]/2);
+    meshPath.lineTo(p1[0]/2, p1[1]/2);
+    meshPath.lineTo(p2[0]/2, p2[1]/2);
+    meshPath.closePath();
   }
+  context.stroke(meshPath);
 
   if (canvas_camera && use_faceLandmarksDetection) {
         const ctx = context;
@@ -1012,26 +1033,6 @@ const RED = "#FF2C35";
   context.restore()
 }
 
-// https://github.com/tensorflow/tfjs-models/tree/master/facemesh/demo
-// START
-
-// https://github.com/tensorflow/tfjs-models/blob/master/facemesh/demo/index.js
-function drawPath(ctx, points, closePath) {
-  const region = new Path2D();
-  region.moveTo(points[0][0]/2, points[0][1]/2);
-  for (let i = 1; i < 3; i++) {
-    const point = points[i];
-    region.lineTo(point[0]/2, point[1]/2);
-  }
-
-  if (closePath) {
-    region.closePath();
-  }
-  ctx.stroke(region);
-}
-
-// END
-
 var posenet, pose_w, pose_h;
 var handpose;
 var handpose_last, handpose_last_timestamp=0;
@@ -1061,6 +1062,7 @@ function draw_pose() {
   var scale = pose_w/cw*2
 
   var part = {}
+  const posePoints = new Path2D();
   posenet.keypoints.forEach(function (p, idx) {
     // Backend keypoints expose .part (camelCase) set by xra_backend_bridge.js.
     // Legacy MediaPipe keypoints use .part only. Support both.
@@ -1074,13 +1076,13 @@ function draw_pose() {
     if (/nose|Eye|Ear/i.test(key) && facemesh_drawn) return;
 
     const {y, x} = p.position;
-
-    context.beginPath();
-    context.arc(x/scale, y/scale, 3, 0, 2*Math.PI);
-    context.fillStyle = 'aqua';
-    context.fill();
+    posePoints.moveTo(x/scale + 3, y/scale);
+    posePoints.arc(x/scale, y/scale, 3, 0, 2*Math.PI);
   });
+  context.fillStyle = 'aqua';
+  context.fill(posePoints);
 
+  const poseBones = new Path2D();
   pose_connected_pairs.forEach(function (pair) {
     var L = part[pair[0]]
     var R = part[pair[1]]
@@ -1088,15 +1090,14 @@ function draw_pose() {
     if (!L || !R || (L.score <= 0) || (R.score <= 0)) return;
 
     var ax = L.position.x, ay = L.position.y, bx = R.position.x, by = R.position.y;
-    context.beginPath();
-    context.moveTo(ax/scale, ay/scale);
-    context.lineTo(bx/scale, by/scale);
-    context.lineWidth = 2;
-    context.strokeStyle = 'aqua';
-    context.stroke();
+    poseBones.moveTo(ax/scale, ay/scale);
+    poseBones.lineTo(bx/scale, by/scale);
   });
+  context.lineWidth = 2;
+  context.strokeStyle = 'aqua';
+  context.stroke(poseBones);
 
-  draw_hand();
+  draw_hand(part);
 
   context.restore()
 }
@@ -1111,7 +1112,7 @@ var fingerLookupIndices = {
       pinky: [0, 17, 18, 19, 20]
 };
 
-function draw_hand() {
+function draw_hand(part) {
   if (!handpose || !handpose.length) return;
 
   var scale = pose_w/cw*2;
@@ -1120,6 +1121,8 @@ function draw_hand() {
   context.strokeStyle = 'pink';
   context.fillStyle = 'pink';
   context.lineWidth = 1.5;
+  const handPoints = new Path2D();
+  const handLines = new Path2D();
 
   handpose.forEach(function (hand) {
     const keypoints = hand.keypoints;
@@ -1130,30 +1133,27 @@ function draw_hand() {
     const wrist_key = (label === 'Left') ? 'rightWrist' : 'leftWrist';
     const body_wrist = part && (part[wrist_key] || part[wrist_key.toLowerCase()]);
     if (body_wrist && body_wrist.score > 0 && body_wrist.position) {
-      context.beginPath();
-      context.moveTo(body_wrist.position.x / scale, body_wrist.position.y / scale);
-      context.lineTo(keypoints[0][0] / scale, keypoints[0][1] / scale);
-      context.stroke();
+      handLines.moveTo(body_wrist.position.x / scale, body_wrist.position.y / scale);
+      handLines.lineTo(keypoints[0][0] / scale, keypoints[0][1] / scale);
     }
 
     keypoints.forEach(function (p) {
-      context.beginPath();
-      context.arc(p[0]/scale, p[1]/scale, 1.8, 0, 2 * Math.PI);
-      context.fill();
+      handPoints.moveTo(p[0]/scale + 1.8, p[1]/scale);
+      handPoints.arc(p[0]/scale, p[1]/scale, 1.8, 0, 2 * Math.PI);
     });
 
     Object.keys(fingerLookupIndices).forEach(function (finger) {
       const points = fingerLookupIndices[finger].map(idx => keypoints[idx]);
 
-      const region = new Path2D();
-      region.moveTo(points[0][0]/scale, points[0][1]/scale);
+      handLines.moveTo(points[0][0]/scale, points[0][1]/scale);
       for (let i = 1; i < points.length; i++) {
         const point = points[i];
-        region.lineTo(point[0]/scale, point[1]/scale);
+        handLines.lineTo(point[0]/scale, point[1]/scale);
       }
-      context.stroke(region);
     });
   });
+  context.fill(handPoints);
+  context.stroke(handLines);
   context.restore();
 }
 

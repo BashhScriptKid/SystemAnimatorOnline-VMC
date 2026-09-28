@@ -1034,11 +1034,41 @@
       refreshAll();
     }
 
-    const mode = select([['video_audio', 'Video + Audio'], ['video', 'Video only'], ['audio', 'Audio only']]);
-    bindRefresh(() => { mode.value = rc().mode || 'video_audio'; });
-    mode.onchange = () => saveRec('mode', mode.value, false);
+    const mode = select([
+      ['video_audio', 'Video + Audio'],
+      ['video', 'Video only'],
+      ['audio_processed', 'Audio only · Processed'],
+      ['audio_raw', 'Audio only · RAW'],
+      ['audio_both', 'Audio only · Processed + RAW']
+    ]);
+    const recorderModeValue = () => {
+      if ((rc().mode || 'video_audio') !== 'audio') return rc().mode || 'video_audio';
+      const variant = ['processed', 'raw', 'both'].includes(rc().audio_only_variant)
+        ? rc().audio_only_variant
+        : 'both';
+      return 'audio_' + variant;
+    };
+    bindRefresh(() => { mode.value = recorderModeValue(); });
+    mode.onchange = () => {
+      if (mode.value.startsWith('audio_')) {
+        rc().mode = 'audio';
+        rc().audio_only_variant = mode.value.slice('audio_'.length);
+      } else {
+        rc().mode = mode.value;
+      }
+      if (rc().mode !== 'audio' && ['flac', 'wav', 'opus'].includes(String(rc().output_format || '').toLowerCase())) {
+        rc().output_format = 'webm';
+      }
+      XRA.profileService.save();
+      events.emit('recorder-config', rc());
+      refreshAll();
+    };
     row(recorderBox.body, 'Mode', mode, {
-      reset: () => saveRec('mode', defaults.recorder.mode, false),
+      reset: () => {
+        rc().mode = defaults.recorder.mode;
+        rc().audio_only_variant = defaults.recorder.audio_only_variant || 'both';
+        XRA.profileService.save(); events.emit('recorder-config', rc()); refreshAll();
+      },
       isDefault: () => (rc().mode || 'video_audio') === defaults.recorder.mode
     });
 
@@ -1059,8 +1089,15 @@
       sub: "XR native output uses the original XR Animator recorder for video fidelity, then XRA intercepts/finalizes the file using your name, Linux folder, MP4/WebM/MKV choice and processed audio. It does not use Chrome screen sharing."
     });
 
-    const outputFormat = select([['webm', 'WebM (native / fastest)'], ['mp4', 'MP4 (H.264/AAC)'], ['mkv', 'MKV']]);
-    bindRefresh(() => { outputFormat.value = rc().output_format || 'webm'; });
+    const videoOutputFormats = [['webm', 'WebM (native / fastest)'], ['mp4', 'MP4 (H.264/AAC)'], ['mkv', 'MKV']];
+    const audioOutputFormats = [['webm', 'WebM / Opus'], ['mp4', 'MP4 / AAC'], ['flac', 'FLAC (lossless)'], ['wav', 'WAV (large)'], ['opus', 'Opus']];
+    const outputFormat = select(videoOutputFormats);
+    bindRefresh(() => {
+      const choices = (rc().mode || 'video_audio') === 'audio' ? audioOutputFormats : videoOutputFormats;
+      const current = String(rc().output_format || 'webm').toLowerCase();
+      outputFormat.replaceChildren(...choices.map(([value, label]) => new Option(label, value)));
+      outputFormat.value = choices.some(([value]) => value === current) ? current : 'webm';
+    });
     outputFormat.onchange = () => saveRec('output_format', outputFormat.value, false);
     row(recorderBox.body, 'Output format', outputFormat, {
       reset: () => saveRec('output_format', defaults.recorder.output_format, false),
@@ -1164,16 +1201,27 @@
     recorderBox.body.appendChild(audioNote);
 
     const rawBackup = document.createElement('input'); rawBackup.type = 'checkbox';
-    bindRefresh(() => { rawBackup.checked = !!rc().raw_audio_backup; rawBackup.disabled = (rc().mode || 'video_audio') === 'video'; });
+    bindRefresh(() => {
+      const currentMode = rc().mode || 'video_audio';
+      rawBackup.checked = currentMode === 'audio'
+        ? rc().audio_only_variant === 'both'
+        : !!rc().raw_audio_backup;
+      rawBackup.disabled = currentMode === 'video' || currentMode === 'audio';
+    });
     rawBackup.onchange = () => saveRec('raw_audio_backup', rawBackup.checked, false);
     row(recorderBox.body, 'RAW microphone backup', rawBackup, {
       reset: () => saveRec('raw_audio_backup', defaults.recorder.raw_audio_backup, false),
       isDefault: () => !!rc().raw_audio_backup === defaults.recorder.raw_audio_backup,
-      sub: 'Records a second, un-gated microphone track so a bad gate/compressor choice never ruins the podcast source.'
+      sub: 'For video recordings, saves a second un-gated microphone track. In Audio only mode choose Processed, RAW or both directly from Mode.'
     });
 
     const rawFormat = select([['flac','FLAC (lossless)'],['opus','Opus'],['wav','WAV (large)']]);
-    bindRefresh(() => { rawFormat.value = rc().raw_audio_format || 'flac'; rawFormat.disabled = !rc().raw_audio_backup || (rc().mode || 'video_audio') === 'video'; });
+    bindRefresh(() => {
+      const currentMode = rc().mode || 'video_audio';
+      rawFormat.value = rc().raw_audio_format || 'flac';
+      rawFormat.disabled = currentMode === 'video'
+        || (currentMode === 'audio' ? rc().audio_only_variant !== 'both' : !rc().raw_audio_backup);
+    });
     rawFormat.onchange = () => saveRec('raw_audio_format', rawFormat.value, false);
     row(recorderBox.body, 'RAW backup format', rawFormat, {
       reset: () => saveRec('raw_audio_format', defaults.recorder.raw_audio_format, false),
@@ -1243,6 +1291,8 @@
       segment.disabled = rc().capture_source === 'native_xr';
       chromaSafe.disabled = noVideo;
       audioBitrate.disabled = noAudio;
+      captureSource.disabled = noVideo;
+      hwEncode.disabled = noVideo || String(rc().output_format || 'webm') !== 'mp4';
     });
 
     const recStatus = el('div', 'xra-status', 'Ready.');
@@ -1258,7 +1308,9 @@
       const estimateHour = humanBytes(XRA.recorder.estimateBytesPerHour());
       recStatus.classList.toggle('recording', !!state.active);
       const nativeXr = state.capture_strategy === 'native_xr' || rc().capture_source === 'native_xr' || rc().capture_source === 'browser_visible' || rc().capture_source === 'native_visible';
-      const sourceName = nativeXr ? 'XR NATIVE OUTPUT' : 'CLEAN SCENE';
+      const sourceName = (rc().mode || 'video_audio') === 'audio'
+        ? `AUDIO ${(rc().audio_only_variant || 'both').toUpperCase()}`
+        : (nativeXr ? 'XR NATIVE OUTPUT' : 'CLEAN SCENE');
       recStatus.textContent = state.active
         ? (nativeXr
           ? `● REC ${humanTime(state.elapsed_ms)} · ${sourceName} · ${state.preset || rc().preset || 'CUSTOM'} · native high-quality capture\nFinal size/path available on STOP`
@@ -1273,7 +1325,16 @@
         const overlay = el('div', 'xra-overlay'); overlay.dataset.xraRecordingConfirm = '1';
         const card = el('div', 'xra-start-card');
         card.appendChild(el('h2', '', 'Start recording?'));
-        card.appendChild(el('div', 'xra-sub', `Current quality: ${rc().width}×${rc().height} @ ${rc().fps} FPS · 30 min ≈ ${humanBytes(XRA.recorder.estimateBytes(30))}`));
+        const tr = source => XRA.i18n?.t?.(source) || source;
+        const audioOnly = (rc().mode || 'video_audio') === 'audio';
+        const audioVariant = rc().audio_only_variant === 'raw'
+          ? tr('RAW')
+          : rc().audio_only_variant === 'processed'
+            ? tr('Processed')
+            : tr('Processed + RAW');
+        card.appendChild(el('div', 'xra-sub', audioOnly
+          ? `${tr('Audio only')} · ${audioVariant} · 30 min ≈ ${humanBytes(XRA.recorder.estimateBytes(30))}`
+          : `Current quality: ${rc().width}×${rc().height} @ ${rc().fps} FPS · 30 min ≈ ${humanBytes(XRA.recorder.estimateBytes(30))}`));
 
         const nameLabel = el('label', 'xra-sub', 'File name');
         const nameInput = stopInputPropagation(document.createElement('input')); nameInput.className = 'xra-control'; nameInput.type = 'text'; nameInput.value = rc().filename || 'XR_Animator_{date}_{time}';
@@ -1281,13 +1342,19 @@
         const dirInput = stopInputPropagation(document.createElement('input')); dirInput.className = 'xra-control'; dirInput.type = 'text'; dirInput.value = rc().output_dir || ''; dirInput.placeholder = '/home/user/Videos/podcast'; dirInput.autocomplete = 'off'; dirInput.spellcheck = false;
         const sourceLabel = el('label', 'xra-sub', 'Recording source');
         const sourceInput = select([['classic_v74','Classic output · recommended'],['clean_scene','Clean scene output · experimental (no UI)'],['native_xr','XR native video only · fallback (no external background)']]); { let v = rc().capture_source || 'classic_v74'; if (v === 'native_visible' || v === 'browser_visible') v = 'classic_v74'; sourceInput.value = v; }
+        sourceInput.disabled = audioOnly;
         const fmtLabel = el('label', 'xra-sub', 'Format');
-        const fmtInput = select([['webm','WebM'],['mp4','MP4'],['mkv','MKV']]); fmtInput.value = rc().output_format || 'webm';
+        const fmtInput = select(audioOnly
+          ? [['webm','WebM / Opus'],['mp4','MP4 / AAC'],['flac','FLAC (lossless)'],['wav','WAV (large)'],['opus','Opus']]
+          : [['webm','WebM'],['mp4','MP4'],['mkv','MKV']]);
+        fmtInput.value = [...fmtInput.options].some(option => option.value === (rc().output_format || 'webm')) ? (rc().output_format || 'webm') : 'webm';
         const summary = el('div', 'xra-status');
         const refreshSummary = () => {
           const nativeXr = sourceInput.value === 'native_xr';
           const classic = sourceInput.value === 'classic_v74';
-          summary.textContent = `Source: ${nativeXr ? 'XR native video-only output' : (classic ? 'Classic compositor (recommended)' : 'clean internal scene (experimental)')}\nDestination: ${dirInput.value || '[XR Animator]/recordings'}\n${nameInput.value || 'recording'} · ${fmtInput.value.toUpperCase()} · ${rc().width}×${rc().height} @ ${rc().fps} FPS · ${(Number(rc().video_bps || 0)/1e6).toFixed(1)} Mbps · 30 min ≈ ${humanBytes(XRA.recorder.estimateBytes(30))}${nativeXr ? '\nNo Chrome screen-sharing permission. Native video + XRA processed podcast audio.' : ''}`;
+          summary.textContent = audioOnly
+            ? `${tr('Source: microphone')} · ${audioVariant}\n${tr('Destination')}: ${dirInput.value || '[XR Animator]/recordings'}\n${nameInput.value || 'recording'} · ${fmtInput.value.toUpperCase()} · ${(Number(rc().audio_bps || 0)/1000).toFixed(0)} kbps · 30 min ≈ ${humanBytes(XRA.recorder.estimateBytes(30))}`
+            : `Source: ${nativeXr ? 'XR native video-only output' : (classic ? 'Classic compositor (recommended)' : 'clean internal scene (experimental)')}\nDestination: ${dirInput.value || '[XR Animator]/recordings'}\n${nameInput.value || 'recording'} · ${fmtInput.value.toUpperCase()} · ${rc().width}×${rc().height} @ ${rc().fps} FPS · ${(Number(rc().video_bps || 0)/1e6).toFixed(1)} Mbps · 30 min ≈ ${humanBytes(XRA.recorder.estimateBytes(30))}${nativeXr ? '\nNo Chrome screen-sharing permission. Native video + XRA processed podcast audio.' : ''}`;
         };
         [nameInput, dirInput, fmtInput, sourceInput].forEach(n => n.addEventListener('input', refreshSummary)); sourceInput.addEventListener('change', refreshSummary); refreshSummary();
         const actions = el('div', 'xra-actions');
@@ -1303,7 +1370,8 @@
           close(true);
         };
         actions.append(cancel, go);
-        card.append(sourceLabel, sourceInput, nameLabel, nameInput, dirLabel, dirInput, fmtLabel, fmtInput, summary, actions);
+        if (!audioOnly) card.append(sourceLabel, sourceInput);
+        card.append(nameLabel, nameInput, dirLabel, dirInput, fmtLabel, fmtInput, summary, actions);
         overlay.appendChild(card); document.body.appendChild(overlay); nameInput.focus(); nameInput.select();
       });
     }

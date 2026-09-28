@@ -102,6 +102,7 @@
   // the user select a model while the old avatar remained active.
   let xraVrmInput = null;
   let vrmLoadBusy = false;
+  let vrmLoadTail = Promise.resolve();
   let vrmRestoreInFlight = null;
   let initialVrmRestored = false;
 
@@ -121,7 +122,15 @@
 
   function modelSearchText(model) {
     if (!model || typeof model !== 'object') return '';
-    const out = [];
+    // model_path is an inherited getter on XR Animator's Model_obj, so it is
+    // absent from Object.entries(). Include the native VRM fields explicitly.
+    const out = [
+      model.model_path,
+      model.para?.url,
+      model.model?.scene?.name,
+      model.model?.meta?.name,
+      model.model?.meta?.title
+    ].filter(value => typeof value === 'string');
     for (const [key, value] of Object.entries(model)) {
       if (!/(name|file|path|url|src)/i.test(key)) continue;
       if (typeof value === 'string' || typeof value === 'number') out.push(String(value));
@@ -201,7 +210,7 @@
       }
       await sleep(60);
     }
-    return true;
+    return false;
   }
 
   function dragDropLoader() {
@@ -213,6 +222,21 @@
   }
 
   const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+  function clearCachedVrmObjectUrl(filename) {
+    const key = String(filename || '').replace(/^.+[\\/]/, '');
+    const dd = window.SA_topmost_window?.DragDrop || window.DragDrop;
+    if (!key || !dd?._obj_url) return;
+    const previous = dd._obj_url[key];
+    if (typeof previous === 'string' && previous.startsWith('blob:')) {
+      try { (window.SA_topmost_window?.URL || window.URL).revokeObjectURL(previous); } catch (_) {}
+    }
+    delete dd._obj_url[key];
+    // SA_DragDropEMU will immediately repopulate _path_to_obj with the current
+    // File. Removing the previous entry prevents a same-named VRM from reusing
+    // a Blob URL that belongs to an older/failed load.
+    if (dd._path_to_obj) delete dd._path_to_obj[key];
+  }
 
   async function uploadAvatarCopy(file) {
     const filename = file?.name || basename(file?.path) || 'avatar.vrm';
@@ -249,35 +273,34 @@
 
 
 
-  async function loadVrmFile(file, { persist = true, quiet = false } = {}) {
+  async function performVrmLoad(file, { persist = true, quiet = false } = {}) {
     if (!file) return false;
-    if (vrmLoadBusy) throw new Error('A VRM is already being loaded');
     const loader = dragDropLoader();
     if (!loader) throw new Error('XR Animator drag/drop loader is not ready');
 
     vrmLoadBusy = true;
     const beforeModels = modelList().slice();
     const beforePaths = extraModelPaths();
+    const beforeActive = beforeModels[0] || null;
+    const beforeActiveScene = beforeActive?.model?.scene || beforeActive?.mesh || beforeActive?.scene || null;
     const filename = file.name || basename(file.path) || 'VRM';
     if (!quiet) XRA.toast(`Caricamento avatar: ${filename}…`, 'info', 2500);
     events.emit('avatar-loading', { name: filename });
 
     try {
       // This mirrors XR Animator's own file-dialog confirmation path.
+      clearCachedVrmObjectUrl(filename);
       let result = loader(file);
       if (result && typeof result.then === 'function') await result;
 
-      // Loading/parsing VRM is asynchronous even when SA_DragDropEMU itself
-      // returns immediately. Wait for the new model to enter THREEX.models and
-      // then explicitly hot-swap to it; otherwise XR Animator can keep showing
-      // the previously active avatar.
-      let candidate = -1;
-      const deadline = performance.now() + 20000;
+      // DragDrop.onDrop_finish now awaits the native GLTF parse and its queued
+      // swap. Keep a small compatibility window for an older/cached core, but
+      // do not impose a 20-second deadline on parsing a large VRM.
+      let candidate = findLoadedModelIndex(file, beforeModels, beforePaths);
+      const deadline = performance.now() + 5000;
       while (performance.now() < deadline) {
-        candidate = findLoadedModelIndex(file, beforeModels, beforePaths);
+        if (candidate < 0) candidate = findLoadedModelIndex(file, beforeModels, beforePaths);
         if (candidate >= 0) {
-          // Give the loader a short moment to finish attaching the VRM scene.
-          await sleep(350);
           try {
             if (await swapToModel(candidate)) {
               if (persist) await persistAvatar(file);
@@ -295,9 +318,16 @@
       }
 
       // Some builds replace the active/default model in-place rather than add
-      // an extra model. If the list itself changed, accept that as success.
+      // an extra model. Accept only a real change to model 0; merely appending
+      // an unswapped model must never produce a false "avatar loaded" result.
       const afterModels = modelList();
-      if (afterModels.length && (afterModels.length !== beforeModels.length || afterModels.some((m,i) => m !== beforeModels[i]))) {
+      const afterActive = afterModels[0] || null;
+      const afterActiveScene = afterActive?.model?.scene || afterActive?.mesh || afterActive?.scene || null;
+      const activeChanged = !!afterActive && (
+        afterActive !== beforeActive ||
+        (!!afterActiveScene && afterActiveScene !== beforeActiveScene)
+      );
+      if (activeChanged) {
         if (persist) await persistAvatar(file);
         if (!quiet) XRA.toast(`Avatar caricato: ${filename}`);
         events.emit('avatar-changed', { name: filename, modelIndex: -1 });
@@ -305,13 +335,22 @@
         return true;
       }
 
-      throw new Error(`XR Animator ha ricevuto “${filename}”, ma non ha creato un nuovo modello entro 20 s`);
+      throw new Error(`XR Animator ha terminato il caricamento di “${filename}”, ma il modello attivo non corrisponde al file selezionato`);
     }
     finally {
       vrmLoadBusy = false;
       initialVrmRestored = true;
       events.emit('avatar-ready', { name: filename });
     }
+  }
+
+  function loadVrmFile(file, options = {}) {
+    // The native loader is global and cannot safely parse/swap two models at
+    // once. Queue restore, picker and retry requests instead of throwing the
+    // old “A VRM is already being loaded” error and leaving a half-built mesh.
+    const task = vrmLoadTail.catch(() => {}).then(() => performVrmLoad(file, options));
+    vrmLoadTail = task.catch(() => {});
+    return task;
   }
 
   function savedAvatarFilename() {
@@ -348,13 +387,28 @@
       if (existing >= 0 && await swapToModel(existing)) return true;
 
       const response = await fetch(`/__xra_avatar/${encodeURIComponent(filename)}`, { cache:'no-store' });
-      if (!response.ok) throw new Error(`Avatar non trovato in avatars/: ${filename}. Caricalo di nuovo una volta: verrà copiato nella cartella dell’app e riusato agli avvii successivi.`);
+      if (!response.ok) {
+        const error = new Error(`Avatar non trovato in avatars/: ${filename}. Caricalo di nuovo una volta: verrà copiato nella cartella dell’app e riusato agli avvii successivi.`);
+        error.xraAvatarMissing = response.status === 404;
+        throw error;
+      }
       const blob = await response.blob();
       const file = new File([blob], filename, { type:blob.type || 'model/gltf-binary' });
       return loadVrmFile(file, { persist:false, quiet:true });
-    })().catch(error => {
+    })().catch(async error => {
       console.error(TAG, 'saved VRM restore failed', error);
-      XRA.toast(error.message || String(error), 'error', 6000);
+      // Clear the preference only for a confirmed missing file. Parse/GPU
+      // failures are transient and must not silently forget the user's avatar.
+      if (error?.xraAvatarMissing && savedAvatarFilename() === filename) {
+        config.avatar ||= {};
+        config.avatar.filename = '';
+        try { await XRA.profileService.save(0); } catch (_) {}
+      }
+      const tr = source => XRA.i18n?.t?.(source) || source;
+      events.emit('avatar-fallback', { missing: filename, fallback: 'default', error });
+      XRA.toast(error?.xraAvatarMissing
+        ? `${tr('Avatar')} “${filename}” ${tr('unavailable: restored default model.')}`
+        : `${tr('Failed to load')} “${filename}”; ${tr('selection was kept for next startup.')}`, 'error', 6000);
       return false;
     }).finally(() => {
       vrmRestoreInFlight = null;
@@ -857,8 +911,12 @@
     const uc = window.MMD_SA?.WebXR?.user_camera;
     for (const value of [
       c?.canvas, c?.canvas_debug, c?.poseNet?.canvas, c?.poseNet?.canvas_debug,
-      c?.facemesh?.canvas, c?.handpose?.canvas,
-      uc?.canvas, uc?.canvas_debug, uc?.poseNet?.canvas, uc?.facemesh?.canvas, uc?.handpose?.canvas
+      c?.facemesh?.canvas, c?.handpose?.canvas, c?.video_canvas_facemesh,
+      c?.wireframe, c?.wireframe?.canvas, c?.poseNet?.wireframe, c?.poseNet?.wireframe?.canvas,
+      c?.facemesh?.wireframe, c?.facemesh?.wireframe?.canvas,
+      uc?.canvas, uc?.canvas_debug, uc?.poseNet?.canvas, uc?.facemesh?.canvas, uc?.handpose?.canvas,
+      uc?.video_canvas_facemesh, uc?.poseNet?.wireframe, uc?.poseNet?.wireframe?.canvas,
+      uc?.facemesh?.wireframe, uc?.facemesh?.wireframe?.canvas
     ]) push(value);
     const rx = kind === 'wireframe' ? /(wire|pose|mocap|landmark)/i : /(debug|ml|pose|face|hand|landmark)/i;
     document.querySelectorAll('canvas').forEach(canvas => {
@@ -1061,14 +1119,13 @@
     }
     else if (kind === 'wireframe') {
       if (remember) config.ui.preview_wireframe = visible;
-      // Wireframe was already verified working in our panel. Keep its proven
-      // path untouched rather than introducing a regression here.
       const display = window.MMD_SA_options?.user_camera?.display;
       if (display?.wireframe && !(display.wireframe instanceof HTMLElement)) {
         try { display.wireframe.hidden = !visible; } catch (e) {}
       }
       const nativeNode = nativeDisplayNode('wireframe');
       if (nativeNode) setElementVisible(nativeNode, visible, /(wire|pose|mocap|landmark|preview)/i);
+      XRA.ensureMocapWireframeLayer?.();
       for (const node of overlayCanvasCandidates('wireframe')) setElementVisible(node, visible, /(wire|pose|mocap|landmark)/i);
     }
     else if (kind === 'debug') {

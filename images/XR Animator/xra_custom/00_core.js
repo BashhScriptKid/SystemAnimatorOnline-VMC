@@ -128,6 +128,13 @@
       offset_z: 0,
       rotation_y: 0
     },
+    second_avatar: {
+      vrm_path: 'AliciaSolid',
+      offset_x: 12.0,
+      offset_y: 0,
+      offset_z: 0,
+      rotation_y: -15.0
+    },
     stage: {
       path: '',
       enabled: false,
@@ -168,6 +175,7 @@
     recorder: {
       preset: 'PODCAST',
       mode: 'video_audio',
+      audio_only_variant: 'both',
       capture_source: 'classic_v74',
       width: 1280,
       height: 720,
@@ -353,6 +361,83 @@
     sleep(ms) { return new Promise(resolve => setTimeout(resolve, ms)); },
     same(a, b) { return JSON.stringify(a) === JSON.stringify(b); }
   };
+
+  let ecoModeActive = false;
+  let ecoPreviousSkipRendering = false;
+
+  function updateEcoCurtainWording(curtain = document.getElementById('XRA_ECO_CURTAIN')) {
+    if (!curtain) return;
+    const title = curtain.querySelector('strong');
+    const detail = curtain.querySelector('span');
+    if (title) title.textContent = XRA.i18n?.t?.('3D Rendering suspended') || '3D Rendering suspended';
+    if (detail) detail.textContent = XRA.i18n?.t?.('Local scene and avatars are hidden. Mocap and Studio Link continue running.') || 'Local scene and avatars are hidden. Mocap and Studio Link continue running.';
+  }
+
+  function ensureEcoCurtain() {
+    let curtain = document.getElementById('XRA_ECO_CURTAIN');
+    if (curtain || !document.body) return curtain;
+
+    curtain = document.createElement('div');
+    curtain.id = 'XRA_ECO_CURTAIN';
+    curtain.className = 'xra-eco-curtain';
+    curtain.hidden = true;
+    curtain.setAttribute('role', 'status');
+    curtain.setAttribute('aria-live', 'polite');
+
+    const card = document.createElement('div');
+    card.className = 'xra-eco-curtain-card';
+    const icon = document.createElement('div');
+    icon.className = 'xra-eco-curtain-icon';
+    icon.textContent = '🌿';
+    const title = document.createElement('strong');
+    title.className = 'xra-label';
+    const detail = document.createElement('span');
+    detail.className = 'xra-sub';
+    card.append(icon, title, detail);
+    curtain.appendChild(card);
+    document.body.appendChild(curtain);
+    updateEcoCurtainWording(curtain);
+    return curtain;
+  }
+
+  function syncEcoPresentation(active) {
+    document.documentElement.classList.toggle('xra-eco-mode', !!active);
+    document.body?.classList.toggle('xra-eco-mode', !!active);
+    const curtain = ensureEcoCurtain();
+    if (curtain) {
+      curtain.hidden = !active;
+      curtain.setAttribute('aria-hidden', active ? 'false' : 'true');
+      if (active) updateEcoCurtainWording(curtain);
+    }
+  }
+
+  events.on('language', () => updateEcoCurtainWording());
+
+  XRA.setEcoMode = active => {
+    const next = !!active;
+    if (next === ecoModeActive) {
+      syncEcoPresentation(next);
+      return ecoModeActive;
+    }
+    const browser = window.System?._browser;
+    if (!browser) return ecoModeActive;
+
+    if (next) {
+      ecoPreviousSkipRendering = !!browser.skip_rendering;
+      browser.skip_rendering = true;
+    } else {
+      browser.skip_rendering = ecoPreviousSkipRendering;
+    }
+    ecoModeActive = next;
+    syncEcoPresentation(ecoModeActive);
+    events.emit('eco-mode-changed', { active: ecoModeActive });
+    return ecoModeActive;
+  };
+  XRA.getEcoMode = () => ecoModeActive;
+
+  if (!document.body) {
+    document.addEventListener('DOMContentLoaded', () => syncEcoPresentation(ecoModeActive), { once: true });
+  }
 
   function nativeMocapType() {
     const pipeline = String(config.performance?.tracking_pipeline || 'FULL_BODY').toUpperCase();
@@ -758,6 +843,79 @@
     adjust(pn.landmarks);
   }
 
+  let mocapWireframeLayer = null;
+  let cachedWireframeDomCanvases = [];
+  let wireframeDomScanAt = 0;
+
+  function wireframeCanvasCandidates(cam = window.System?._browser?.camera) {
+    const out = [];
+    const add = value => {
+      if (!(value instanceof HTMLCanvasElement) || out.includes(value)) return;
+      out.push(value);
+    };
+    const addWireframe = value => {
+      add(value);
+      add(value?.canvas);
+      add(value?._canvas);
+      add(value?.element);
+      add(value?.node);
+    };
+    const userCam = window.MMD_SA?.WebXR?.user_camera;
+    add(cam?.video_canvas_facemesh);
+    addWireframe(cam?.facemesh?.wireframe);
+    addWireframe(cam?.poseNet?.wireframe);
+    addWireframe(cam?.wireframe);
+    add(userCam?.video_canvas_facemesh);
+    addWireframe(userCam?.facemesh?.wireframe);
+    addWireframe(userCam?.poseNet?.wireframe);
+    addWireframe(window.MMD_SA_options?.user_camera?.display?.wireframe);
+    // syncCameraCanvasesLayout can run once per mocap packet.  Keep the broad
+    // DOM fallback for unusual backends, but never scan every canvas per frame.
+    const now = performance.now();
+    if (!cachedWireframeDomCanvases.length || now - wireframeDomScanAt > 2000 || cachedWireframeDomCanvases.some(node => !node.isConnected)) {
+      wireframeDomScanAt = now;
+      cachedWireframeDomCanvases = [];
+      try {
+        document.querySelectorAll('canvas').forEach(node => {
+          const label = `${node.id || ''} ${node.className || ''} ${node.dataset?.type || ''} ${node.dataset?.name || ''}`;
+          if (/(wire|mocap|pose.*landmark|landmark.*pose)/i.test(label)) cachedWireframeDomCanvases.push(node);
+        });
+      } catch (e) {}
+    }
+    cachedWireframeDomCanvases.forEach(add);
+    return out;
+  }
+
+  function ensureMocapWireframeLayer(cam = window.System?._browser?.camera) {
+    if (!document.body) return [];
+    if (!mocapWireframeLayer?.isConnected) {
+      mocapWireframeLayer = document.getElementById('XRA_MOCAP_WIREFRAME_LAYER');
+      if (!mocapWireframeLayer) {
+        mocapWireframeLayer = document.createElement('div');
+        mocapWireframeLayer.id = 'XRA_MOCAP_WIREFRAME_LAYER';
+        mocapWireframeLayer.setAttribute('aria-hidden', 'true');
+        document.body.appendChild(mocapWireframeLayer);
+      }
+    }
+    const canvases = wireframeCanvasCandidates(cam);
+    for (const canvas of canvases) {
+      canvas.classList.add('xra-mocap-wireframe-front');
+      canvas.style.setProperty('pointer-events', 'none', 'important');
+      canvas.style.setProperty('will-change', 'contents, transform');
+      // A large z-index cannot escape XR Animator's transformed stacking
+      // context. Reparent the existing canvas (not a copy) to a top-level
+      // overlay so the WebGL stage can never cover it.
+      if (canvas.parentElement !== mocapWireframeLayer) mocapWireframeLayer.appendChild(canvas);
+    }
+    return canvases;
+  }
+
+  XRA.ensureMocapWireframeLayer = ensureMocapWireframeLayer;
+  window.addEventListener('MMDStarted', () => {
+    for (const delay of [0, 250, 900, 2000]) setTimeout(ensureMocapWireframeLayer, delay);
+  });
+  events.on('camera-started', () => setTimeout(ensureMocapWireframeLayer, 0));
+
   function syncCameraCanvasesLayout(cam, cw, ch) {
     if (!cam) return;
     try {
@@ -800,7 +958,7 @@
         vcStyle.pixelHeight = o_h;
       }
 
-      if (cam.video_canvas_facemesh) {
+      for (const wireframeCanvas of ensureMocapWireframeLayer(cam)) {
         const wf = display.wireframe || {};
         const wf_scale = wf.align_with_video ? 1 : (wf.scale || (typeof is_mobile !== 'undefined' && is_mobile ? 0.25 : 1));
         const wf_w = ~~(o_w * wf_scale);
@@ -815,7 +973,8 @@
           wf_left = ew * (1 + (wf.left != null ? wf.left : 1));
           wf_top = th * (1 + (wf.top != null ? wf.top : -1));
         }
-        const fmStyle = cam.video_canvas_facemesh.style;
+        const fmStyle = wireframeCanvas.style;
+        wireframeCanvas.classList?.add('xra-mocap-wireframe-front');
         const wStr = `${wf_w}px`;
         const hStr = `${wf_h}px`;
         const lStr = `${wf_left}px`;

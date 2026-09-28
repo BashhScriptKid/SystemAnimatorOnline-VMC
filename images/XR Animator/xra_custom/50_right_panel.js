@@ -16,6 +16,11 @@
   let backgroundsLoaded = false;
   let healthTimer = 0;
   let studioWindow = null;
+  let studioLinkBody = null;
+  const studioInstanceId = (() => {
+    try { return crypto.randomUUID(); }
+    catch (_) { return Date.now().toString(36) + '-' + Math.random().toString(36).slice(2); }
+  })();
 
   function markCustomPreset() {
     if (config.performance?.master_preset && config.performance.master_preset !== 'CUSTOM') {
@@ -193,9 +198,11 @@
 
     const w = window.screen.availWidth || 1280;
     const h = window.screen.availHeight || 800;
+    const studioUrl = new URL('/p2p_chat.html', location.href);
+    studioUrl.searchParams.set('instance', studioInstanceId);
     studioWindow = window.open(
-      '/p2p_chat.html',
-      'xra-studio-link',
+      studioUrl.href,
+      'xra-studio-link-' + studioInstanceId,
       `width=${w},height=${h},left=0,top=0,resizable=yes,scrollbars=yes`
     );
     if (!studioWindow) {
@@ -207,6 +214,7 @@
 
   function installStudioLink(parent) {
     const box = details(parent, '💬 Studio Link');
+    studioLinkBody = box.body;
     const note = el('div', 'xra-note');
     const open = button('APRI CHAT', 'xra-action primary');
     open.onclick = openStudioLink;
@@ -2447,6 +2455,23 @@
       sub: 'Disattivare preserveDrawingBuffer riduce il carico memoria VRAM e calore GPU. Verifica che registrazione video e screenshot continuino a funzionare correttamente.'
     });
 
+    const ecoModeCheckbox = document.createElement('input');
+    ecoModeCheckbox.type = 'checkbox';
+    bindRefresh(() => {
+      ecoModeCheckbox.checked = !!XRA.getEcoMode?.();
+    });
+    ecoModeCheckbox.onchange = () => {
+      XRA.setEcoMode?.(ecoModeCheckbox.checked);
+      try { studioWindow?.XRAStudioLink?.setEcoMode?.(ecoModeCheckbox.checked); } catch (_) {}
+      refreshAll();
+    };
+    events.on('eco-mode-changed', ({ active }) => {
+      ecoModeCheckbox.checked = !!active;
+    });
+    row(secRendering.body, '🌿 3D Eco Mode', ecoModeCheckbox, {
+      sub: 'Stops local rendering of the 3D scene and avatar. Webcam tracking and mocap stream continue.'
+    });
+
     // -------------------------------------------------------------------------
     // 4. 📊 Diagnostica & Ottimizzazione
     // -------------------------------------------------------------------------
@@ -3010,8 +3035,8 @@
 
       const numInput = stopInputPropagation(document.createElement('input'));
       numInput.type = 'number';
-      numInput.min = '-20000';
-      numInput.max = '20000';
+      numInput.min = String(min);
+      numInput.max = String(max);
       numInput.step = String(step);
       numInput.style.cssText = 'width:68px;padding:2px 4px;font-size:12px;text-align:right;background:#181c20;color:#eee;border:1px solid #444;border-radius:4px;';
 
@@ -3054,12 +3079,12 @@
       });
     };
 
-    makeAvatarRow(secAvatarPos.body, 'Personaggio X', 'offset_x', -50.0, 50.0, 0.1, 0.0, 'Sposta solo l\'avatar a sinistra o a destra; stage e camera restano fissi.');
-    makeAvatarRow(secAvatarPos.body, 'Personaggio Y', 'offset_y', -20.0, 20.0, 0.1, 0.0, 'Sposta solo l\'avatar verso l\'alto o verso il basso; stage e camera restano fissi.');
-    makeAvatarRow(secAvatarPos.body, 'Personaggio Z', 'offset_z', -50.0, 50.0, 0.1, 0.0, 'Sposta solo l\'avatar in profondità; stage e camera restano fissi.');
-    makeAvatarRow(secAvatarPos.body, 'Rotazione Y (Yaw)', 'rotation_y', -180, 180, 1, 0, 'Ruota l\'avatar sul posto.');
+    makeAvatarRow(secAvatarPos.body, 'Avatar X', 'offset_x', -50.0, 50.0, 0.1, 0.0, 'Moves only the avatar left or right; stage and camera stay fixed.');
+    makeAvatarRow(secAvatarPos.body, 'Avatar Y', 'offset_y', -20.0, 20.0, 0.1, 0.0, 'Moves only the avatar up or down; stage and camera stay fixed.');
+    makeAvatarRow(secAvatarPos.body, 'Avatar Z', 'offset_z', -50.0, 50.0, 0.1, 0.0, 'Moves only the avatar in depth; stage and camera stay fixed.');
+    makeAvatarRow(secAvatarPos.body, 'Avatar rotation Y', 'rotation_y', -90, 90, 1, 0, 'Rotates the avatar in place within the rig stable range (±90°).');
 
-    const resetAvatarPosBtn = button('↺ Ripristina posizione personaggio');
+    const resetAvatarPosBtn = button('↺ Reset avatar position');
     resetAvatarPosBtn.onclick = async () => {
       config.avatar ||= {};
       config.avatar.offset_x = 0.0;
@@ -3071,6 +3096,271 @@
       refreshAll();
     };
     secAvatarPos.body.appendChild(resetAvatarPosBtn);
+
+    const secAvatar2Pos = details(studioLinkBody || box.body, '🌐 Remote avatar (Studio Link)');
+    const remoteStatus = el('div', 'xra-note', 'Waiting for an avatar stream from Studio Link.');
+    secAvatar2Pos.body.appendChild(remoteStatus);
+
+    const tr = source => XRA.i18n?.t?.(source) || source;
+    let currentStatusUpdater = () => {
+      remoteStatus.textContent = tr('Waiting for an avatar stream from Studio Link.');
+      remoteStatus.dataset.state = '';
+    };
+    const setRemoteStatus = updater => {
+      currentStatusUpdater = typeof updater === 'function' ? updater : () => {
+        remoteStatus.textContent = tr(updater);
+        remoteStatus.dataset.state = '';
+      };
+      currentStatusUpdater();
+    };
+
+    events.on('second-avatar-status', ({ active, awaitingPose, reason }) => {
+      setRemoteStatus(() => {
+        if (active) {
+          remoteStatus.textContent = awaitingPose
+            ? tr('Studio Link connected: waiting for initial mocap data…')
+            : tr('Remote avatar receiving.');
+          remoteStatus.dataset.state = awaitingPose ? 'loading' : 'active';
+        } else {
+          remoteStatus.textContent = reason === 'timeout'
+            ? tr('Mocap stream interrupted: no frames received.')
+            : tr('Waiting for an avatar stream from Studio Link.');
+          remoteStatus.dataset.state = reason === 'timeout' ? 'error' : '';
+        }
+      });
+      refreshAll();
+    });
+    events.on('second-avatar-loading', ({ loading, name }) => {
+      if (loading) {
+        setRemoteStatus(() => {
+          remoteStatus.textContent = `${tr('Loading remote avatar')}: ${name}…`;
+          remoteStatus.dataset.state = 'loading';
+        });
+      }
+    });
+    events.on('second-avatar-error', ({ message }) => {
+      setRemoteStatus(() => {
+        remoteStatus.textContent = `${tr('Remote avatar error')}: ${message}`;
+        remoteStatus.dataset.state = 'error';
+      });
+    });
+    events.on('second-avatar-fallback', ({ missing, fallback }) => {
+      setRemoteStatus(() => {
+        remoteStatus.textContent = `${tr('Remote avatar')} “${missing}” ${tr('unavailable: reverted to')} ${fallback}.`;
+        remoteStatus.dataset.state = 'error';
+      });
+      avatarsLoaded = false;
+      void refreshAvatars();
+    });
+
+    const avatarNote = el(
+      'div',
+      'xra-note',
+      'The peer only sends the mocap pose. Choose the local VRM to represent them here; the peer’s file is not transferred.'
+    );
+    secAvatar2Pos.body.appendChild(avatarNote);
+
+    const avatarSelect = select([
+      ['AliciaSolid', 'AliciaSolid (Default)']
+    ]);
+    let avatarsLoaded = false;
+
+    const refreshAvatars = async () => {
+      const list = await (XRA.stage?.listAvatars?.() || []);
+      avatarSelect.replaceChildren();
+      avatarSelect.add(new Option(tr('AliciaSolid (Default)'), 'AliciaSolid'));
+      for (const file of list) avatarSelect.add(new Option(file, file));
+
+      const current = config.second_avatar?.vrm_path || 'AliciaSolid';
+      if (![...avatarSelect.options].some(option => option.value === current)) {
+        avatarSelect.add(new Option(current, current));
+      }
+      avatarSelect.value = current;
+      avatarsLoaded = true;
+    };
+    refreshAvatars();
+
+    bindRefresh(() => {
+      currentStatusUpdater();
+      if (!avatarsLoaded) refreshAvatars();
+      const current = config.second_avatar?.vrm_path || 'AliciaSolid';
+      if (![...avatarSelect.options].some(option => option.value === current)) {
+        avatarSelect.add(new Option(current, current));
+      }
+      avatarSelect.value = current;
+    });
+
+    let avatarSelectionGeneration = 0;
+    const selectRemoteAvatar = async (name, { save = true } = {}) => {
+      const generation = ++avatarSelectionGeneration;
+      const previous = config.second_avatar?.vrm_path || 'AliciaSolid';
+      avatarSelect.disabled = true;
+      try {
+        const loaded = await XRA.secondAvatar?.loadModel(name, { force: true });
+        if (!loaded) throw new Error(tr('Upload failed') || 'caricamento annullato');
+        if (generation !== avatarSelectionGeneration) return false;
+        config.second_avatar ||= {};
+        config.second_avatar.vrm_path = name;
+        avatarSelect.value = name;
+        if (save) await XRA.profileService.save();
+        XRA.toast(`${tr('Remote avatar ready')}: ${name}`, 'info', 3000);
+        return true;
+      } catch (error) {
+        if (generation !== avatarSelectionGeneration) return false;
+        config.second_avatar ||= {};
+        config.second_avatar.vrm_path = previous;
+        avatarSelect.value = previous;
+        XRA.toast(`${tr('Remote avatar')}: ${error?.message || error}`, 'error', 6000);
+        return false;
+      } finally {
+        if (generation === avatarSelectionGeneration) {
+          avatarSelect.disabled = false;
+          refreshAll();
+        }
+      }
+    };
+
+    avatarSelect.onchange = () => {
+      void selectRemoteAvatar(avatarSelect.value);
+    };
+
+    row(secAvatar2Pos.body, 'Remote avatar model', avatarSelect, {
+      reset: async () => {
+        await selectRemoteAvatar('AliciaSolid', { save: false });
+      },
+      isDefault: () => !config.second_avatar?.vrm_path || config.second_avatar.vrm_path === 'AliciaSolid',
+      sub: 'Local model used for the mocap received from the peer.'
+    });
+
+    let secAvatarFileInput = null;
+    const ensureSecAvatarInput = () => {
+      if (secAvatarFileInput?.isConnected) return secAvatarFileInput;
+      let input = document.getElementById('XRA_SEC_AVATAR_FILE_INPUT');
+      if (!(input instanceof HTMLInputElement)) {
+        input = document.createElement('input');
+        input.id = 'XRA_SEC_AVATAR_FILE_INPUT';
+        input.type = 'file';
+        input.accept = '.vrm,.glb,model/gltf-binary';
+        input.style.cssText = 'position:fixed;left:-10000px;top:-10000px;width:1px;height:1px;opacity:0;pointer-events:none;';
+        input.tabIndex = -1;
+        document.body.appendChild(input);
+      }
+
+      input.onchange = async () => {
+        const file = input.files?.[0];
+        if (!file) return;
+        try {
+          XRA.toast(`${tr('Importing remote avatar')}: ${file.name}…`, 'info', 2500);
+          const response = await fetch('/__xra_avatar?filename=' + encodeURIComponent(file.name), {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/octet-stream',
+              'X-Filename': file.name
+            },
+            body: file
+          });
+          const data = await response.json().catch(() => ({}));
+          if (!response.ok || data.ok === false) {
+            throw new Error(data.error || (`${tr('Upload failed')}: ${response.status}`));
+          }
+
+          const storedName = data.filename || file.name;
+          const selected = await selectRemoteAvatar(storedName);
+          if (!selected) return;
+          avatarsLoaded = false;
+          await refreshAvatars();
+        } catch (error) {
+          console.error(TAG, 'remote avatar upload failed:', error);
+          XRA.toast(`${tr('Importing remote avatar')}: ${error?.message || error}`, 'error', 6000);
+        } finally {
+          input.value = '';
+        }
+      };
+      secAvatarFileInput = input;
+      return input;
+    };
+
+    const loadVrmBtn = button('Import / change VRM…');
+    loadVrmBtn.onclick = () => {
+      const input = ensureSecAvatarInput();
+      input.value = '';
+      input.click();
+    };
+    secAvatar2Pos.body.appendChild(loadVrmBtn);
+
+    const makeSecondAvatarRow = (parentNode, label, key, min, max, step, defVal, sub = '') => {
+      const wrap = el('div', 'xra-stack-control');
+      const flex = el('div');
+      flex.style.cssText = 'display:flex;align-items:center;gap:8px;width:100%;';
+
+      const slider = document.createElement('input');
+      slider.type = 'range';
+      slider.min = String(min);
+      slider.max = String(max);
+      slider.step = String(step);
+      slider.style.flex = '1';
+
+      const numInput = stopInputPropagation(document.createElement('input'));
+      numInput.type = 'number';
+      numInput.min = String(min);
+      numInput.max = String(max);
+      numInput.step = String(step);
+      numInput.style.cssText = 'width:68px;padding:2px 4px;font-size:12px;text-align:right;background:#181c20;color:#eee;border:1px solid #444;border-radius:4px;';
+
+      flex.append(slider, numInput);
+      wrap.appendChild(flex);
+
+      bindRefresh(() => {
+        const value = Number(config.second_avatar?.[key] ?? defVal);
+        slider.value = String(value);
+        numInput.value = String(value);
+      });
+
+      const commit = value => {
+        const nextValue = Math.max(min, Math.min(max, Number(value)));
+        if (!Number.isFinite(nextValue)) return;
+        config.second_avatar ||= {};
+        config.second_avatar[key] = nextValue;
+        slider.value = String(nextValue);
+        numInput.value = String(nextValue);
+        XRA.stage?.applySecondAvatarPosition?.();
+      };
+
+      slider.oninput = () => commit(slider.value);
+      slider.onchange = () => XRA.profileService.save();
+      numInput.oninput = () => commit(numInput.value);
+      numInput.onchange = () => XRA.profileService.save();
+
+      row(parentNode, label, wrap, {
+        reset: () => {
+          config.second_avatar ||= {};
+          config.second_avatar[key] = defVal;
+          XRA.stage?.applySecondAvatarPosition?.();
+        },
+        isDefault: () => Number(config.second_avatar?.[key] ?? defVal) === defVal,
+        sub
+      });
+    };
+
+    makeSecondAvatarRow(secAvatar2Pos.body, 'Remote Avatar X', 'offset_x', -50, 50, 0.1, 12, 'Horizontal position, independent of stage and camera.');
+    makeSecondAvatarRow(secAvatar2Pos.body, 'Remote Avatar Y', 'offset_y', -20, 20, 0.1, 0, 'Height of the remote avatar.');
+    makeSecondAvatarRow(secAvatar2Pos.body, 'Remote Avatar Z', 'offset_z', -50, 50, 0.1, 0, 'Depth of the remote avatar.');
+    makeSecondAvatarRow(secAvatar2Pos.body, 'Rotation Y (Yaw)', 'rotation_y', -90, 90, 1, -15, 'Remote avatar rotation within the rig stable range (±90°).');
+
+    const resetSecondAvatarPosBtn = button('↺ Reset remote avatar position');
+    resetSecondAvatarPosBtn.onclick = async () => {
+      config.second_avatar ||= {};
+      Object.assign(config.second_avatar, {
+        offset_x: 12,
+        offset_y: 0,
+        offset_z: 0,
+        rotation_y: -15
+      });
+      XRA.stage?.applySecondAvatarPosition?.();
+      await XRA.profileService.save();
+      refreshAll();
+    };
+    secAvatar2Pos.body.appendChild(resetSecondAvatarPosBtn);
 
     const stageAdvanced = details(box.body, '⚙️ Allineamento stage avanzato');
     const autoCenter = document.createElement('input');

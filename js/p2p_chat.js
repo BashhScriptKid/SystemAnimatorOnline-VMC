@@ -15,6 +15,7 @@
     sessionRefreshDevices: $('session-refresh-devices-btn'),
     disconnect: $('disconnect-btn'), muteBtn: $('mute-btn'),
     share: $('screenshare-btn'), stopShare: $('stop-share-btn'),
+    avatarBtn: $('send-avatar-btn'), ecoBtn: $('eco-mode-btn'),
     syncBtn: $('sync-marker-btn'), chatSyncBtn: $('chat-sync-marker-btn'),
     mainVideo: $('main-video'), localCanvas: $('local-preview-canvas'), noVideo: $('no-video-msg'), shareLabel: $('share-label'), remoteAudio: $('remote-audio'),
     chatBox: $('chat-box'), chatEmpty: $('chat-empty'), chatInput: $('chat-input'), send: $('send-btn'), chatState: $('chat-state'),
@@ -50,6 +51,617 @@
   let isChatMinimized = false;
   let unreadChatCount = 0;
   let unreadDividerInserted = false;
+  const AVATAR_POSE_VERSION = 2;
+  const AVATAR_FRAME_INTERVAL_MS = 33;
+  const AVATAR_MAX_BUFFERED_BYTES = 128 * 1024;
+  const AVATAR_STOP_QUERY_TIMEOUT_MS = 2500;
+  const AVATAR_START_HEARTBEAT_MS = 2000;
+  const AVATAR_LOCAL_POSE_GRACE_MS = 2000;
+  const AVATAR_REALTIME_NEGOTIATION_GRACE_MS = 10000;
+  const AVATAR_REALTIME_FAILURE_GRACE_MS = 4000;
+  const REMOTE_AVATAR_ACTIVITY_TIMEOUT_MS = 6500;
+  let isStreamingAvatar = false;
+  let avatarStreamTimer = null;
+  let avatarStreamId = '';
+  let avatarSequence = 0;
+  let avatarLastStartSentAt = 0;
+  let avatarMissingPoseSince = 0;
+  let avatarRealtimeFailureSince = 0;
+  let avatarRealtimeNegotiationStartedAt = 0;
+  let avatarRealtimeEverReady = false;
+  let motionConnection = null;
+  let motionChannelNegotiated = false;
+  let incomingAvatarStreamId = '';
+  let incomingAvatarLastPoseAt = 0;
+  let remoteReceiverRecording = false;
+  let remoteReceiverRecorderKnown = false;
+  let isAvatarStopPending = false;
+  let pendingAvatarStopQuery = null;
+  let recorderStateTimer = null;
+  let recorderStateUnsubscribers = [];
+  let lastLocalReceiverRecording = null;
+
+  function animatorWindow() {
+    try {
+      const opener = window.opener;
+      if (!opener || opener.closed || !opener.XRA) return null;
+      return opener;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function dataTransportReady() {
+    if (currentEngine === 'nostr') {
+      return nostrAdapter?.dataChannel?.readyState === 'open';
+    }
+    return !!connection?.open;
+  }
+
+  function updateAvatarButtonUi() {
+    if (!ui.avatarBtn) return;
+    const hasAnimator = !!animatorWindow();
+    const isReceiving = !!incomingAvatarStreamId;
+    const recordingLocked = isStreamingAvatar && remoteReceiverRecording;
+    const recorderUnknownLocked = isStreamingAvatar && !remoteReceiverRecorderKnown;
+    if (ui.disconnect) {
+      ui.disconnect.disabled = recordingLocked;
+      ui.disconnect.title = recordingLocked
+        ? 'Il peer sta registrando: non puoi chiudere la sessione mentre riceve il mocap'
+        : 'Disconnetti';
+    }
+    if (ui.topbarClose) {
+      ui.topbarClose.disabled = recordingLocked;
+      ui.topbarClose.title = recordingLocked
+        ? 'Il peer sta registrando: chiusura bloccata per non interrompere il mocap'
+        : 'Chiudi';
+    }
+    ui.avatarBtn.disabled = !dataTransportReady()
+      || !hasAnimator
+      || isReceiving
+      || recordingLocked
+      || recorderUnknownLocked
+      || isAvatarStopPending;
+    const textNode = ui.avatarBtn.querySelector('.avatar-text');
+    const iconNode = ui.avatarBtn.querySelector('.avatar-icon');
+    ui.avatarBtn.classList.toggle('is-receiving', isReceiving);
+    ui.avatarBtn.classList.toggle('is-recording-locked', recordingLocked || recorderUnknownLocked);
+    ui.avatarBtn.setAttribute('aria-pressed', isStreamingAvatar ? 'true' : 'false');
+
+    if (isStreamingAvatar) {
+      ui.avatarBtn.classList.add('is-streaming');
+      if (isAvatarStopPending) {
+        if (textNode) textNode.textContent = 'Verifica REC…';
+        if (iconNode) iconNode.textContent = '⏳';
+        ui.avatarBtn.title = 'Verifico che il peer non stia registrando';
+      } else if (recordingLocked) {
+        if (textNode) textNode.textContent = 'REC remoto';
+        if (iconNode) iconNode.textContent = '🔒';
+        ui.avatarBtn.title = 'Il peer sta registrando: la condivisione mocap non può essere interrotta';
+      } else if (recorderUnknownLocked) {
+        if (textNode) textNode.textContent = 'Verifica REC…';
+        if (iconNode) iconNode.textContent = '🔒';
+        ui.avatarBtn.title = 'Stato registrazione del peer non ancora verificato: stop bloccato';
+      } else {
+        if (textNode) textNode.textContent = 'Ferma avatar';
+        if (iconNode) iconNode.textContent = '⏹️';
+        ui.avatarBtn.title = 'Interrompi lo streaming mocap del tuo avatar';
+      }
+    } else if (isReceiving) {
+      ui.avatarBtn.classList.remove('is-streaming');
+      if (textNode) textNode.textContent = 'Avatar ricevuto';
+      if (iconNode) iconNode.textContent = '🔒';
+      ui.avatarBtn.title = 'L’altro partecipante sta già condividendo il mocap';
+    } else {
+      ui.avatarBtn.classList.remove('is-streaming');
+      if (textNode) textNode.textContent = 'Invia avatar';
+      if (iconNode) iconNode.textContent = '🎭';
+      ui.avatarBtn.title = hasAnimator
+        ? 'Invia il mocap del tuo avatar in tempo reale'
+        : 'Apri Studio Link dal pannello di XR Animator per inviare il mocap';
+    }
+    updateEcoButtonUi();
+  }
+
+  let isEcoMode = Boolean(animatorWindow()?.XRA?.getEcoMode?.());
+
+  function updateEcoButtonUi() {
+    if (!ui.ecoBtn) return;
+    const hasAnimator = !!animatorWindow();
+    ui.ecoBtn.disabled = !hasAnimator;
+    const textNode = ui.ecoBtn.querySelector('.eco-text');
+    if (isEcoMode) {
+      ui.ecoBtn.classList.add('is-active');
+      if (textNode) textNode.textContent = 'Scena 3D OFF';
+      ui.ecoBtn.title = 'Rendering locale di avatar e scena disattivato (clicca per riattivare)';
+    } else {
+      ui.ecoBtn.classList.remove('is-active');
+      if (textNode) textNode.textContent = 'Risparmio 3D';
+      ui.ecoBtn.title = hasAnimator
+        ? 'Ferma il rendering locale di avatar e scena; il mocap continua a essere inviato'
+        : 'Disponibile quando Studio Link è aperto da XR Animator';
+    }
+  }
+
+  function setEcoMode(active, { announce = false } = {}) {
+    isEcoMode = !!active;
+    const animator = animatorWindow();
+    if (animator?.XRA?.setEcoMode) {
+      isEcoMode = !!animator.XRA.setEcoMode(isEcoMode);
+    } else if (animator?.System?._browser) {
+      animator.System._browser.skip_rendering = isEcoMode;
+      animator.XRA?.events?.emit?.('eco-mode-changed', { active: isEcoMode });
+    }
+    updateEcoButtonUi();
+    if (announce) {
+      appendMessage(
+        'system',
+        isEcoMode
+          ? 'Risparmio 3D attivo: avatar e scena locali non vengono renderizzati; il mocap continua.'
+          : 'Risparmio 3D disattivato: rendering locale ripristinato.'
+      );
+    }
+  }
+
+  function toggleEcoMode() {
+    if (!animatorWindow()) return;
+    setEcoMode(!isEcoMode, { announce: true });
+  }
+
+  window.XRAStudioLink = {
+    setEcoMode(active) {
+      setEcoMode(active);
+    },
+    status() {
+      return {
+        connected: dataTransportReady(),
+        sendingAvatar: isStreamingAvatar,
+        receivingAvatar: !!incomingAvatarStreamId,
+        remoteReceiverRecording,
+        remoteReceiverRecorderKnown,
+        stopPending: isAvatarStopPending,
+        streamId: avatarStreamId || incomingAvatarStreamId || '',
+        realtimeReady: currentEngine === 'nostr'
+          ? nostrAdapter?.realtimeChannel?.readyState === 'open'
+          : !!motionConnection?.open
+      };
+    }
+  };
+  window.addEventListener('focus', () => {
+    const active = animatorWindow()?.XRA?.getEcoMode?.();
+    if (typeof active === 'boolean') setEcoMode(active);
+  });
+
+  function peerBufferedAmount(target) {
+    const channel = target?.dataChannel || target?._dc || null;
+    return Number(channel?.bufferedAmount || 0);
+  }
+
+  function realtimeTransportReady() {
+    return currentEngine === 'nostr'
+      ? nostrAdapter?.realtimeChannel?.readyState === 'open'
+      : !!motionConnection?.open;
+  }
+
+  function avatarStopSafetyLocked() {
+    return isStreamingAvatar && (!remoteReceiverRecorderKnown || remoteReceiverRecording);
+  }
+
+  function sendRealtimePayload(payload) {
+    if (currentEngine === 'nostr') {
+      // If the lossy channel exists, congestion means "drop this frame".
+      // Never put stale motion frames back into the reliable chat queue.
+      if (nostrAdapter?.realtimeChannelNegotiated) {
+        const sent = !!nostrAdapter.sendRealtime?.(payload);
+        if (sent || avatarRealtimeEverReady) return sent;
+      }
+      if (peerBufferedAmount(nostrAdapter) > AVATAR_MAX_BUFFERED_BYTES) return false;
+      return !!nostrAdapter?.send?.(payload);
+    }
+
+    if (motionConnection?.open) {
+      if (peerBufferedAmount(motionConnection) > AVATAR_MAX_BUFFERED_BYTES) return false;
+      try {
+        motionConnection.send(payload);
+        return true;
+      } catch (_) {
+        return false;
+      }
+    }
+    if (motionChannelNegotiated && avatarRealtimeEverReady) return false;
+    if (connection?.open && peerBufferedAmount(connection) <= AVATAR_MAX_BUFFERED_BYTES) {
+      try {
+        connection.send(payload);
+        return true;
+      } catch (_) {
+        return false;
+      }
+    }
+    return false;
+  }
+
+  function makeAvatarStreamId() {
+    try {
+      return crypto.randomUUID();
+    } catch (_) {
+      return Date.now().toString(36) + '-' + Math.random().toString(36).slice(2);
+    }
+  }
+
+  function announceAvatarStream(streamId = avatarStreamId) {
+    if (!streamId) return false;
+    const sent = sendDataPayload({
+      type: 'xra-avatar-start',
+      version: AVATAR_POSE_VERSION,
+      streamId,
+      sentAt: Date.now()
+    });
+    if (sent) avatarLastStartSentAt = Date.now();
+    return sent;
+  }
+
+  function sendAvatarPose(pose) {
+    if (!pose || !isStreamingAvatar || !avatarStreamId) return false;
+    return sendRealtimePayload({
+      type: 'xra-avatar-pose',
+      version: AVATAR_POSE_VERSION,
+      streamId: avatarStreamId,
+      seq: ++avatarSequence,
+      rig: pose.rig,
+      bones: pose.bones,
+      hips: pose.hips,
+      expressions: pose.expressions,
+      sentAt: Date.now()
+    });
+  }
+
+  function settleAvatarStopQuery(allowed, reason = '') {
+    const pending = pendingAvatarStopQuery;
+    if (!pending) return;
+    pendingAvatarStopQuery = null;
+    clearTimeout(pending.timer);
+    isAvatarStopPending = false;
+    updateAvatarButtonUi();
+    pending.resolve({ allowed: !!allowed, reason });
+  }
+
+  function stopAvatarStreaming({ notifyPeer = true, force = false, announce = true } = {}) {
+    if (!isStreamingAvatar) return false;
+    if (!force && avatarStopSafetyLocked()) {
+      appendMessage(
+        'system',
+        remoteReceiverRecording
+          ? '🔒 Il peer sta registrando: la condivisione mocap deve restare attiva.'
+          : '🔒 Stato REC del peer non verificabile: lo stop del mocap è bloccato.'
+      );
+      updateAvatarButtonUi();
+      return false;
+    }
+    if (force && pendingAvatarStopQuery) settleAvatarStopQuery(false, 'cancelled');
+    const stoppedStreamId = avatarStreamId;
+    isStreamingAvatar = false;
+    avatarStreamId = '';
+    avatarSequence = 0;
+    avatarLastStartSentAt = 0;
+    avatarMissingPoseSince = 0;
+    avatarRealtimeFailureSince = 0;
+    avatarRealtimeNegotiationStartedAt = 0;
+    avatarRealtimeEverReady = false;
+    remoteReceiverRecording = false;
+    remoteReceiverRecorderKnown = false;
+    if (avatarStreamTimer) {
+      clearInterval(avatarStreamTimer);
+      avatarStreamTimer = null;
+    }
+    if (notifyPeer && stoppedStreamId) {
+      sendDataPayload({
+        type: 'xra-avatar-stop',
+        version: AVATAR_POSE_VERSION,
+        streamId: stoppedStreamId,
+        sentAt: Date.now()
+      });
+    }
+    updateAvatarButtonUi();
+    if (announce) appendMessage('system', 'Trasmissione avatar interrotta.');
+    return true;
+  }
+
+  function startAvatarStreaming() {
+    if (isStreamingAvatar) return;
+    if (incomingAvatarStreamId) {
+      appendMessage('system', 'L’altro partecipante sta già condividendo il mocap. Solo un avatar può essere inviato alla volta.');
+      updateAvatarButtonUi();
+      return;
+    }
+    const animator = animatorWindow();
+    const firstPose = animator?.XRA?.stage?.getLocalAvatarPose?.() || null;
+    if (!firstPose || Number(firstPose.version) !== AVATAR_POSE_VERSION) {
+      appendMessage('system', '⚠️ Mocap avatar non disponibile. Avvia XR Animator e attendi il caricamento del modello.');
+      updateAvatarButtonUi();
+      return;
+    }
+
+    const nextStreamId = makeAvatarStreamId();
+    const started = announceAvatarStream(nextStreamId);
+    if (!started) {
+      appendMessage('system', '⚠️ Canale dati non disponibile: avatar non avviato.');
+      updateAvatarButtonUi();
+      return;
+    }
+
+    avatarStreamId = nextStreamId;
+    avatarSequence = 0;
+    avatarMissingPoseSince = 0;
+    avatarRealtimeFailureSince = 0;
+    avatarRealtimeNegotiationStartedAt = Date.now();
+    avatarRealtimeEverReady = realtimeTransportReady();
+    remoteReceiverRecording = false;
+    remoteReceiverRecorderKnown = false;
+    isStreamingAvatar = true;
+    updateAvatarButtonUi();
+    appendMessage('system', 'Trasmissione mocap avatar avviata.');
+    sendAvatarPose(firstPose);
+
+    avatarStreamTimer = setInterval(() => {
+      if (!isStreamingAvatar) return;
+      const now = Date.now();
+      if (realtimeTransportReady()) {
+        avatarRealtimeEverReady = true;
+      } else if (!avatarRealtimeEverReady
+        && now - avatarRealtimeNegotiationStartedAt >= AVATAR_REALTIME_NEGOTIATION_GRACE_MS) {
+        if (!avatarStopSafetyLocked()) {
+          const failedStreamId = avatarStreamId;
+          sendDataPayload({
+            type: 'xra-avatar-transport-error',
+            version: AVATAR_POSE_VERSION,
+            streamId: failedStreamId,
+            sentAt: now
+          });
+          stopAvatarStreaming({ notifyPeer: false, force: true, announce: false });
+          appendMessage('system', 'Trasmissione mocap interrotta: il canale realtime non è stato aperto. Riprova la condivisione.');
+          return;
+        }
+      }
+      if (now - avatarLastStartSentAt >= AVATAR_START_HEARTBEAT_MS) {
+        announceAvatarStream();
+      }
+      const pose = animatorWindow()?.XRA?.stage?.getLocalAvatarPose?.() || null;
+      if (pose) {
+        avatarMissingPoseSince = 0;
+        if (sendAvatarPose(pose)) {
+          avatarRealtimeFailureSince = 0;
+        } else if (avatarRealtimeEverReady) {
+          avatarRealtimeFailureSince ||= now;
+          if (now - avatarRealtimeFailureSince >= AVATAR_REALTIME_FAILURE_GRACE_MS) {
+            if (avatarStopSafetyLocked()) return;
+            const failedStreamId = avatarStreamId;
+            sendDataPayload({
+              type: 'xra-avatar-transport-error',
+              version: AVATAR_POSE_VERSION,
+              streamId: failedStreamId,
+              sentAt: Date.now()
+            });
+            stopAvatarStreaming({ notifyPeer: false, force: true, announce: false });
+            appendMessage('system', 'Trasmissione mocap interrotta: il canale realtime non risponde. Riprova la condivisione.');
+          }
+        }
+      } else {
+        avatarMissingPoseSince ||= Date.now();
+        if (Date.now() - avatarMissingPoseSince >= AVATAR_LOCAL_POSE_GRACE_MS) {
+          if (avatarStopSafetyLocked()) return;
+          stopAvatarStreaming({ notifyPeer: true, force: true, announce: false });
+          appendMessage('system', 'Trasmissione mocap interrotta: XR Animator o l’avatar locale non sono più disponibili.');
+        }
+      }
+    }, AVATAR_FRAME_INTERVAL_MS);
+  }
+
+  async function requestAvatarStopPermission() {
+    if (!isStreamingAvatar || !avatarStreamId) return false;
+    if (!remoteReceiverRecorderKnown) {
+      appendMessage('system', '🔒 Stato REC del peer non verificabile: la condivisione mocap resta attiva.');
+      updateAvatarButtonUi();
+      return false;
+    }
+    if (remoteReceiverRecording) {
+      appendMessage('system', '🔒 Il peer sta registrando: la condivisione mocap non può essere interrotta.');
+      updateAvatarButtonUi();
+      return false;
+    }
+    if (pendingAvatarStopQuery) return (await pendingAvatarStopQuery.promise).allowed;
+
+    const requestId = 'avatar_stop_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+    const streamId = avatarStreamId;
+    let resolveQuery;
+    const promise = new Promise(resolve => { resolveQuery = resolve; });
+    const timer = setTimeout(() => {
+      settleAvatarStopQuery(false, 'timeout');
+    }, AVATAR_STOP_QUERY_TIMEOUT_MS);
+    pendingAvatarStopQuery = { requestId, streamId, promise, resolve: resolveQuery, timer };
+    isAvatarStopPending = true;
+    updateAvatarButtonUi();
+
+    const sent = sendDataPayload({
+      type: 'xra-avatar-stop-query',
+      version: AVATAR_POSE_VERSION,
+      requestId,
+      streamId,
+      sentAt: Date.now()
+    });
+    if (!sent) settleAvatarStopQuery(false, 'transport-unavailable');
+
+    const result = await promise;
+    if (!result.allowed) {
+      const message = result.reason === 'recording'
+        ? '🔒 Il peer sta registrando: la condivisione mocap resta attiva.'
+        : '⚠️ Il peer non ha autorizzato lo stop del mocap; la condivisione resta attiva.';
+      appendMessage('system', message);
+    }
+    return result.allowed;
+  }
+
+  async function toggleAvatarStreaming() {
+    if (!isStreamingAvatar) {
+      startAvatarStreaming();
+      return;
+    }
+    if (await requestAvatarStopPermission()) {
+      stopAvatarStreaming({ notifyPeer: false });
+    }
+  }
+
+  function stopRemoteAvatarSession(reason = 'disconnected') {
+    incomingAvatarStreamId = '';
+    incomingAvatarLastPoseAt = 0;
+    lastLocalReceiverRecording = null;
+    try {
+      animatorWindow()?.XRA?.secondAvatar?.stopSession?.({ force: true, reason });
+    } catch (_) {}
+    updateAvatarButtonUi();
+  }
+
+  function handleIncomingAvatarMessage(payload) {
+    if (!payload || typeof payload !== 'object') return false;
+    if (payload.type === 'xra-avatar-receiver-state') {
+      if (String(payload.streamId || '') !== avatarStreamId || !isStreamingAvatar) return true;
+      const wasRecording = remoteReceiverRecording;
+      const wasKnown = remoteReceiverRecorderKnown;
+      const stopWasPending = !!pendingAvatarStopQuery;
+      remoteReceiverRecorderKnown = payload.recorderKnown !== false;
+      remoteReceiverRecording = remoteReceiverRecorderKnown && !!payload.recording;
+      if ((!remoteReceiverRecorderKnown || remoteReceiverRecording) && pendingAvatarStopQuery) {
+        settleAvatarStopQuery(false, remoteReceiverRecording ? 'recording' : 'recorder-status-unavailable');
+      }
+      updateAvatarButtonUi();
+      if (!wasRecording && remoteReceiverRecording && !stopWasPending) {
+        appendMessage('system', '🔒 Il peer ha avviato la registrazione: lo stop del mocap è bloccato.');
+      } else if (wasRecording && !remoteReceiverRecording) {
+        appendMessage('system', 'Il peer ha terminato la registrazione: ora puoi fermare il mocap.');
+      } else if (wasKnown && !remoteReceiverRecorderKnown) {
+        appendMessage('system', '🔒 Stato REC del peer non verificabile: lo stop del mocap è bloccato.');
+      }
+      return true;
+    }
+    if (payload.type === 'xra-avatar-stop-query') {
+      const streamId = String(payload.streamId || '');
+      const requestId = String(payload.requestId || '');
+      const matchesActiveStream = !!streamId && streamId === incomingAvatarStreamId;
+      const recorderState = localRecorderStateDirect();
+      const recorderKnown = matchesActiveStream && recorderState.known;
+      const recording = recorderKnown && recorderState.active;
+      const allowed = matchesActiveStream && recorderKnown && !recording;
+      // Approve and tear down in the same event turn. A recording-start event
+      // cannot interleave between this status check and the remote teardown.
+      if (allowed) stopRemoteAvatarSession('peer-stop-approved');
+      sendDataPayload({
+        type: 'xra-avatar-stop-result',
+        version: AVATAR_POSE_VERSION,
+        requestId,
+        streamId,
+        allowed,
+        recording,
+        recorderKnown,
+        reason: !matchesActiveStream
+          ? 'stale-stream'
+          : (!recorderKnown ? 'recorder-status-unavailable' : (recording ? 'recording' : '')),
+        sentAt: Date.now()
+      });
+      if (recording) sendReceiverRecordingState(true);
+      return true;
+    }
+    if (payload.type === 'xra-avatar-stop-result') {
+      const pending = pendingAvatarStopQuery;
+      if (!pending
+        || String(payload.requestId || '') !== pending.requestId
+        || String(payload.streamId || '') !== pending.streamId) return true;
+      remoteReceiverRecorderKnown = payload.recorderKnown !== false;
+      remoteReceiverRecording = remoteReceiverRecorderKnown && !!payload.recording;
+      settleAvatarStopQuery(!!payload.allowed, String(payload.reason || ''));
+      return true;
+    }
+    if (payload.type === 'xra-avatar-reject') {
+      if (isStreamingAvatar && String(payload.streamId || '') === avatarStreamId) {
+        stopAvatarStreaming({ notifyPeer: false, force: true, announce: false });
+        appendMessage('system', 'L’altro partecipante ha già ottenuto il controllo della condivisione mocap.');
+      }
+      return true;
+    }
+    if (payload.type === 'xra-avatar-start') {
+      if (Number(payload.version) !== AVATAR_POSE_VERSION) {
+        appendMessage('system', '⚠️ Versione stream avatar non compatibile.');
+        return true;
+      }
+      const streamId = String(payload.streamId || '');
+      if (!streamId) return true;
+      if (isStreamingAvatar && avatarStreamId !== streamId) {
+        // Simultaneous clicks converge on the lexicographically smaller UUID.
+        // Both peers make the same decision without a central coordinator.
+        if (streamId.localeCompare(avatarStreamId) < 0) {
+          stopAvatarStreaming({ notifyPeer: true, force: true, announce: false });
+          appendMessage('system', 'Avvio simultaneo: il controllo mocap è passato all’altro partecipante.');
+        } else {
+          sendDataPayload({
+            type: 'xra-avatar-reject',
+            version: AVATAR_POSE_VERSION,
+            streamId,
+            activeStreamId: avatarStreamId,
+            reason: 'sender-already-active',
+            sentAt: Date.now()
+          });
+          return true;
+        }
+      }
+      if (incomingAvatarStreamId !== streamId) {
+        incomingAvatarStreamId = streamId;
+        incomingAvatarLastPoseAt = performance.now();
+        lastLocalReceiverRecording = null;
+        appendMessage('system', 'L’altro partecipante sta inviando il proprio avatar.');
+        try { animatorWindow()?.XRA?.secondAvatar?.startSession?.(payload); } catch (_) {}
+      }
+      sendReceiverRecordingState(true);
+      updateAvatarButtonUi();
+      return true;
+    }
+    if (payload.type === 'xra-avatar-transport-error') {
+      if (String(payload.streamId || '') !== incomingAvatarStreamId) return true;
+      const recorderState = localRecorderStateDirect();
+      if (!recorderState.known || recorderState.active) {
+        sendReceiverRecordingState(true);
+        return true;
+      }
+      appendMessage('system', 'Stream mocap remoto interrotto: il canale realtime non risponde.');
+      stopRemoteAvatarSession('transport-error');
+      return true;
+    }
+    if (payload.type === 'xra-avatar-stream-timeout') {
+      if (!isStreamingAvatar || String(payload.streamId || '') !== avatarStreamId) return true;
+      if (payload.recorderKnown !== true || payload.recording === true) return true;
+      remoteReceiverRecorderKnown = true;
+      remoteReceiverRecording = false;
+      stopAvatarStreaming({ notifyPeer: false, force: true, announce: false });
+      appendMessage('system', 'Trasmissione mocap interrotta: il peer non riceve più i frame realtime. Riprova la condivisione.');
+      return true;
+    }
+    if (payload.type === 'xra-avatar-pose') {
+      if (String(payload.streamId || '') !== incomingAvatarStreamId) return true;
+      incomingAvatarLastPoseAt = performance.now();
+      try { animatorWindow()?.XRA?.secondAvatar?.applyRemotePose?.(payload); } catch (_) {}
+      return true;
+    }
+    if (payload.type === 'xra-avatar-stop') {
+      if (String(payload.streamId || '') !== incomingAvatarStreamId) return true;
+      const recorderState = localRecorderStateDirect();
+      if (!recorderState.known || recorderState.active) {
+        appendMessage('system', '🔒 Stop mocap ignorato: la registrazione locale è ancora attiva.');
+        sendReceiverRecordingState(true);
+        return true;
+      }
+      appendMessage('system', 'L’altro partecipante ha interrotto la trasmissione avatar.');
+      stopRemoteAvatarSession('peer-stopped');
+      return true;
+    }
+    return false;
+  }
 
   function isRemoteSharingActive() {
     return Boolean(isRemoteSharingScreen);
@@ -230,11 +842,19 @@
     updateUnreadBadge();
     updateShareButtonsUi();
     updateMuteButtonUi();
+    updateAvatarButtonUi();
+    startRecorderStateMonitor();
     setSyncButtonState('ready');
     updateSessionLayout();
   }
 
   function showSetup() {
+    stopAvatarStreaming({ notifyPeer: false, force: true });
+    stopRemoteAvatarSession('setup');
+    stopRecorderStateMonitor();
+    remoteReceiverRecording = false;
+    remoteReceiverRecorderKnown = false;
+    if (pendingAvatarStopQuery) settleAvatarStopQuery(false, 'session-ended');
     connectedPeerId = '';
     isRemoteSharingScreen = false;
     remoteVideoStream = null;
@@ -255,6 +875,7 @@
     }
     updateShareButtonsUi();
     updateMuteButtonUi();
+    updateAvatarButtonUi();
     setSyncButtonState('ready');
   }
 
@@ -422,10 +1043,94 @@
       return nostrAdapter.send(payload);
     }
     if (connection?.open) {
-      connection.send(payload);
-      return true;
+      try {
+        connection.send(payload);
+        return true;
+      } catch (_) {
+        return false;
+      }
     }
     return false;
+  }
+
+  function localRecorderStateDirect() {
+    try {
+      const status = animatorWindow()?.XRA?.recorder?.status;
+      if (typeof status !== 'function') return { known: false, active: false };
+      const result = status();
+      if (!result || typeof result.active !== 'boolean') {
+        return { known: false, active: false };
+      }
+      return { known: true, active: result.active };
+    } catch (_) {
+      return { known: false, active: false };
+    }
+  }
+
+  function sendReceiverRecordingState(force = false) {
+    if (!incomingAvatarStreamId) return false;
+    const recorderState = localRecorderStateDirect();
+    const stateKey = recorderState.known ? (recorderState.active ? 'recording' : 'idle') : 'unknown';
+    if (!force && stateKey === lastLocalReceiverRecording) return true;
+    const sent = sendDataPayload({
+      type: 'xra-avatar-receiver-state',
+      version: AVATAR_POSE_VERSION,
+      streamId: incomingAvatarStreamId,
+      recording: recorderState.active,
+      recorderKnown: recorderState.known,
+      sentAt: Date.now()
+    });
+    if (sent) lastLocalReceiverRecording = stateKey;
+    return sent;
+  }
+
+  function stopRecorderStateMonitor() {
+    if (recorderStateTimer) {
+      clearInterval(recorderStateTimer);
+      recorderStateTimer = null;
+    }
+    for (const unsubscribe of recorderStateUnsubscribers) {
+      try { unsubscribe?.(); } catch (_) {}
+    }
+    recorderStateUnsubscribers = [];
+    lastLocalReceiverRecording = null;
+  }
+
+  function startRecorderStateMonitor() {
+    stopRecorderStateMonitor();
+    const events = animatorWindow()?.XRA?.events;
+    if (events?.on) {
+      const notify = () => sendReceiverRecordingState(true);
+      recorderStateUnsubscribers.push(events.on('recording-start', notify));
+      recorderStateUnsubscribers.push(events.on('recording-stop', notify));
+    }
+
+    const tick = () => {
+      if (!incomingAvatarStreamId) return;
+      if (incomingAvatarLastPoseAt
+        && performance.now() - incomingAvatarLastPoseAt > REMOTE_AVATAR_ACTIVITY_TIMEOUT_MS) {
+        const recorderState = localRecorderStateDirect();
+        if (!recorderState.known || recorderState.active) {
+          sendReceiverRecordingState(false);
+          return;
+        }
+        const expiredStreamId = incomingAvatarStreamId;
+        appendMessage('system', 'Stream mocap remoto scaduto: controllo liberato.');
+        stopRemoteAvatarSession('timeout');
+        sendDataPayload({
+          type: 'xra-avatar-stream-timeout',
+          version: AVATAR_POSE_VERSION,
+          streamId: expiredStreamId,
+          recording: false,
+          recorderKnown: true,
+          sentAt: Date.now()
+        });
+        return;
+      }
+      sendReceiverRecordingState(false);
+    };
+    tick();
+    recorderStateTimer = setInterval(tick, 500);
   }
 
   async function triggerSyncMarker() {
@@ -614,9 +1319,70 @@
     }
   }
 
+  function bindMotionConnection(nextConnection) {
+    if (!nextConnection) return;
+    const expectedPeer = connection?.peer || connectedPeerId;
+    if (!expectedPeer || nextConnection.peer !== expectedPeer) {
+      console.warn('[Studio Link] rejected avatar channel from unexpected peer', nextConnection.peer);
+      try { nextConnection.close(); } catch (_) {}
+      return;
+    }
+    if (motionConnection && motionConnection !== nextConnection) {
+      try { motionConnection.close(); } catch (_) {}
+    }
+    motionConnection = nextConnection;
+    motionChannelNegotiated = true;
+
+    nextConnection.on('open', () => {
+      if (motionConnection !== nextConnection) return;
+      updateAvatarButtonUi();
+    });
+    nextConnection.on('data', payload => {
+      if (motionConnection !== nextConnection) return;
+      handleIncomingAvatarMessage(payload);
+    });
+    nextConnection.on('close', () => {
+      if (motionConnection !== nextConnection) return;
+      motionConnection = null;
+      updateAvatarButtonUi();
+      if (connection?.open) {
+        setTimeout(() => ensureMotionConnection(connection?.peer), 400);
+      }
+    });
+    nextConnection.on('error', error => {
+      console.warn('[Studio Link] avatar realtime channel', error);
+      setTimeout(() => {
+        if (motionConnection !== nextConnection || nextConnection.open) return;
+        motionConnection = null;
+        try { nextConnection.close(); } catch (_) {}
+        updateAvatarButtonUi();
+        if (connection?.open) ensureMotionConnection(connection.peer);
+      }, 400);
+    });
+  }
+
+  function ensureMotionConnection(peerId) {
+    const target = String(peerId || '').trim();
+    if (currentEngine !== 'peerjs' || !peer?.open || !connection?.open || !target) return;
+    if (motionConnection?.open || motionConnection?.peer === target) return;
+    // Exactly one side creates the unordered channel, avoiding duplicate
+    // streams when both Studio Link windows observe the main connection.
+    if (String(peer.id).localeCompare(target) >= 0) return;
+    bindMotionConnection(peer.connect(target, {
+      label: 'xra-avatar-realtime',
+      metadata: { kind: 'xra-avatar-realtime' },
+      reliable: false,
+      serialization: 'json'
+    }));
+  }
+
   function bindConnection(nextConnection) {
     if (!nextConnection) return;
     if (connection && connection !== nextConnection) {
+      const oldMotionConnection = motionConnection;
+      motionConnection = null;
+      motionChannelNegotiated = false;
+      try { oldMotionConnection?.close(); } catch (_) {}
       try { connection.close(); } catch (_) {}
     }
     connection = nextConnection;
@@ -633,6 +1399,7 @@
       setHint('Connessione stabilita.');
       appendMessage('system', `Canale diretto aperto con ${peerId}`);
       ui.chatInput.focus();
+      ensureMotionConnection(peerId);
 
       if (!mediaCall && peer?.id && peer.id.localeCompare(peerId) > 0) {
         startMedia('audio');
@@ -652,6 +1419,9 @@
       }
       if (payload && typeof payload === 'object' && typeof payload.type === 'string' && payload.type.startsWith('xra-sync-')) {
         handleSyncProtocolMessage(payload);
+        return;
+      }
+      if (handleIncomingAvatarMessage(payload)) {
         return;
       }
       if (payload && typeof payload === 'object' && payload.type === 'xra-screen-start') {
@@ -714,6 +1484,10 @@
   }
 
   function clearSessionMedia() {
+    const oldMotionConnection = motionConnection;
+    motionConnection = null;
+    motionChannelNegotiated = false;
+    try { oldMotionConnection?.close(); } catch (_) {}
     stopTracks(localAudio);
     stopTracks(displayStream);
     localAudio = null;
@@ -721,9 +1495,15 @@
     remoteStream = null;
     remoteVideoStream = null;
     isRemoteSharingScreen = false;
+    stopAvatarStreaming({ notifyPeer: false, force: true });
+    stopRemoteAvatarSession('disconnected');
+    stopRecorderStateMonitor();
+    remoteReceiverRecording = false;
+    remoteReceiverRecorderKnown = false;
     resetVideoStage(true);
     updateShareButtonsUi();
     updateMuteButtonUi();
+    updateAvatarButtonUi();
   }
 
   function finishPeerSession(message, { notifyPeer = false } = {}) {
@@ -924,6 +1704,7 @@
     const text = ui.muteBtn.querySelector('.mute-text');
     if (icon) icon.textContent = isMuted ? '🔇' : '🎤';
     if (text) text.textContent = isMuted ? 'Smuta' : 'Muta';
+    updateAvatarButtonUi();
   }
 
   function toggleMute() {
@@ -1154,6 +1935,11 @@
   }
 
   function disconnectEverything() {
+    if (isStreamingAvatar && remoteReceiverRecording) {
+      appendMessage('system', '🔒 Il peer sta registrando: disconnessione bloccata per non interrompere il mocap.');
+      updateAvatarButtonUi();
+      return;
+    }
     if (currentEngine === 'nostr') {
       finishNostrSession('Sessione Nostr terminata', { notifyPeer: true });
       return;
@@ -1289,6 +2075,9 @@
         }
         if (payload && typeof payload === 'object' && typeof payload.type === 'string' && payload.type.startsWith('xra-sync-')) {
           handleSyncProtocolMessage(payload);
+          return;
+        }
+        if (handleIncomingAvatarMessage(payload)) {
           return;
         }
         if (payload && typeof payload === 'object' && payload.type === 'xra-screen-start') {
@@ -1495,6 +2284,7 @@
       ui.connect.disabled = !ui.peerInput.value.trim();
       setNetworkState('online', 'Pronto a collegarsi');
       setHint('Condividi il tuo ID oppure incolla quello ricevuto.');
+      if (connection?.open) ensureMotionConnection(connection.peer);
 
       const requestedPeer = new URLSearchParams(location.search).get('peer');
       if (requestedPeer && requestedPeer !== id && !autoConnectDone) {
@@ -1503,7 +2293,12 @@
         connectToPeer(requestedPeer);
       }
     });
-    peer.on('connection', bindConnection);
+    peer.on('connection', nextConnection => {
+      const isMotion = nextConnection?.metadata?.kind === 'xra-avatar-realtime'
+        || nextConnection?.label === 'xra-avatar-realtime';
+      if (isMotion) bindMotionConnection(nextConnection);
+      else bindConnection(nextConnection);
+    });
     peer.on('call', answerCall);
     peer.on('disconnected', () => {
       setNetworkState('connecting', 'Riconnessione alla rete…');
@@ -1586,6 +2381,11 @@
   ui.disconnect.addEventListener('click', disconnectEverything);
   ui.topbarFullscreen?.addEventListener('click', toggleFullscreen);
   ui.topbarClose?.addEventListener('click', () => {
+    if (isStreamingAvatar && remoteReceiverRecording) {
+      appendMessage('system', '🔒 Il peer sta registrando: chiusura bloccata per non interrompere il mocap.');
+      updateAvatarButtonUi();
+      return;
+    }
     if (typeof nw !== 'undefined' && nw?.Window?.get) {
       try {
         nw.Window.get().close();
@@ -1595,6 +2395,8 @@
     window.close();
   });
   ui.muteBtn?.addEventListener('click', toggleMute);
+  ui.avatarBtn?.addEventListener('click', toggleAvatarStreaming);
+  ui.ecoBtn?.addEventListener('click', toggleEcoMode);
   ui.share.addEventListener('click', () => startMedia('screen'));
   ui.noVideo?.addEventListener('click', () => {
     if (!isSharingScreenLocally() && !isRemoteSharingActive()) {
@@ -1656,7 +2458,16 @@
   ui.audioOutput.addEventListener('change', () => switchAudioOutput(ui.audioOutput.value));
   ui.sessionAudioOutput?.addEventListener('change', () => switchAudioOutput(ui.sessionAudioOutput.value));
   navigator.mediaDevices?.addEventListener?.('devicechange', refreshDevices);
-  window.addEventListener('beforeunload', () => {
+  window.addEventListener('beforeunload', event => {
+    if (isStreamingAvatar && remoteReceiverRecording) {
+      event.preventDefault();
+      event.returnValue = '';
+      return;
+    }
+    stopAvatarStreaming({ notifyPeer: true, force: true });
+    stopRemoteAvatarSession('window-closed');
+    stopRecorderStateMonitor();
+    try { motionConnection?.close(); } catch (_) {}
     try { connection?.close(); } catch (_) {}
     try { mediaCall?.close(); } catch (_) {}
     try { nostrAdapter?.disconnect(); } catch (_) {}

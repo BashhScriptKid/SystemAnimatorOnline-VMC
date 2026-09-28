@@ -12,6 +12,17 @@
   let sceneZoomRetryTimer = 0;
   const cameraZoomBeforeScene = new Map();
   const trackballZoomRuntime = new WeakMap();
+  // THREE Euler XYZ reconstructs Y from quaternions in the stable [-90°, 90°]
+  // interval.  Values outside it can fold back after a VRM update and make the
+  // placement control appear stuck.  Keep UI and runtime on that same domain.
+  const AVATAR_YAW_MIN_DEG = -90;
+  const AVATAR_YAW_MAX_DEG = 90;
+
+  function clampAvatarYaw(value, fallback = 0) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) return fallback;
+    return util.clamp(numeric, AVATAR_YAW_MIN_DEG, AVATAR_YAW_MAX_DEG);
+  }
 
   function getAvatarModel() {
     return window.MMD_SA?.THREEX?.get_model?.(0) || window.MMD_SA?.THREEX?.models?.[0] || null;
@@ -787,7 +798,7 @@
     const ox = Number(config.avatar?.offset_x ?? 0.0);
     const oy = Number(config.avatar?.offset_y ?? 0.0);
     const oz = Number(config.avatar?.offset_z ?? 0.0);
-    const rotY = (Number(config.avatar?.rotation_y ?? 0.0)) * (Math.PI / 180.0);
+    const rotY = clampAvatarYaw(config.avatar?.rotation_y, 0) * (Math.PI / 180.0);
     const x = baseOrigin.x + ox;
     const y = baseOrigin.y + oy;
     const z = baseOrigin.z + oz;
@@ -805,6 +816,608 @@
     root.matrixWorldNeedsUpdate = true;
     return true;
   }
+
+  const STUDIO_LINK_POSE_VERSION = 2;
+  const MAX_REMOTE_BONES = 96;
+  const MAX_REMOTE_EXPRESSIONS = 160;
+  const REMOTE_POSE_TIMEOUT_MS = 3000;
+  const VRM_HUMANOID_BONES = [
+    'hips', 'spine', 'chest', 'upperChest', 'neck', 'head',
+    'leftEye', 'rightEye', 'jaw',
+    'leftShoulder', 'leftUpperArm', 'leftLowerArm', 'leftHand',
+    'rightShoulder', 'rightUpperArm', 'rightLowerArm', 'rightHand',
+    'leftUpperLeg', 'leftLowerLeg', 'leftFoot', 'leftToes',
+    'rightUpperLeg', 'rightLowerLeg', 'rightFoot', 'rightToes',
+    'leftThumbMetacarpal', 'leftThumbProximal', 'leftThumbDistal',
+    'leftIndexProximal', 'leftIndexIntermediate', 'leftIndexDistal',
+    'leftMiddleProximal', 'leftMiddleIntermediate', 'leftMiddleDistal',
+    'leftRingProximal', 'leftRingIntermediate', 'leftRingDistal',
+    'leftLittleProximal', 'leftLittleIntermediate', 'leftLittleDistal',
+    'rightThumbMetacarpal', 'rightThumbProximal', 'rightThumbDistal',
+    'rightIndexProximal', 'rightIndexIntermediate', 'rightIndexDistal',
+    'rightMiddleProximal', 'rightMiddleIntermediate', 'rightMiddleDistal',
+    'rightRingProximal', 'rightRingIntermediate', 'rightRingDistal',
+    'rightLittleProximal', 'rightLittleIntermediate', 'rightLittleDistal'
+  ];
+  const MMD_STREAM_BONES = [
+    '下半身', '上半身', '上半身2', '首', '頭', '両目',
+    '左肩', '左腕', '左ひじ', '左手首',
+    '右肩', '右腕', '右ひじ', '右手首',
+    '左足', '左ひざ', '左足首', '左つま先',
+    '右足', '右ひざ', '右足首', '右つま先'
+  ];
+
+  function normalizedBoneNode(avatar, boneName) {
+    const humanoid = avatar?.model?.humanoid;
+    if (!humanoid) return null;
+    return humanoid.getNormalizedBoneNode?.(boneName)
+      || humanoid.humanBones?.[boneName]?.node
+      || humanoid.getRawBoneNode?.(boneName)
+      || null;
+  }
+
+  function normalizedExpressionName(avatar, name) {
+    if (!name) return '';
+    try {
+      return avatar?.blendshape_map_name?.(name, true) || String(name);
+    } catch (_) {
+      return String(name);
+    }
+  }
+
+  function finiteQuaternionTuple(q) {
+    if (!q) return null;
+    const tuple = [Number(q.x), Number(q.y), Number(q.z), Number(q.w)];
+    if (!tuple.every(Number.isFinite)) return null;
+    const length = Math.hypot(tuple[0], tuple[1], tuple[2], tuple[3]);
+    if (length < 1e-8) return null;
+    return tuple.map(value => Number((value / length).toFixed(5)));
+  }
+
+  function getLocalAvatarPose() {
+    const avatar = getAvatarModel();
+    if (!avatar) return null;
+
+    const humanoid = avatar.model?.humanoid;
+    if (humanoid) {
+      const useNormalizedPose = humanoid.autoUpdateHumanBones !== false;
+      const discovered = Object.keys(humanoid.humanBones || {});
+      const boneNames = [...new Set(discovered.length ? discovered : VRM_HUMANOID_BONES)];
+      const bones = [];
+      for (const boneName of boneNames.slice(0, MAX_REMOTE_BONES)) {
+        const node = useNormalizedPose
+          ? normalizedBoneNode(avatar, boneName)
+          : humanoid.getRawBoneNode?.(boneName);
+        let tuple = finiteQuaternionTuple(node?.quaternion);
+        // XR Animator drives VRM 0 bones in its legacy X/Z handedness, even
+        // when the three-vrm normalized rig is active. Undo that conversion
+        // before sending the version-independent Studio Link pose.
+        if (tuple && avatar.is_VRM1 === false) {
+          tuple = [-tuple[0], tuple[1], -tuple[2], tuple[3]];
+        }
+        if (tuple) bones.push([boneName, ...tuple]);
+      }
+
+      let hips = null;
+      const hipsNode = useNormalizedPose
+        ? normalizedBoneNode(avatar, 'hips')
+        : humanoid.getRawBoneNode?.('hips');
+      const restPose = useNormalizedPose ? humanoid.normalizedRestPose : humanoid.rawRestPose;
+      const rest = restPose?.hips?.position;
+      if (hipsNode?.position && rest && rest.length >= 3) {
+        const delta = [
+          Number(hipsNode.position.x) - Number(rest[0]),
+          Number(hipsNode.position.y) - Number(rest[1]),
+          Number(hipsNode.position.z) - Number(rest[2])
+        ];
+        if (delta.every(Number.isFinite)) {
+          if (avatar.is_VRM1 === false) {
+            delta[0] *= -1;
+            delta[2] *= -1;
+          }
+          hips = delta.map(value => Number(value.toFixed(4)));
+        }
+      }
+
+      const expressions = [];
+      const manager = avatar.model?.expressionManager;
+      const expressionList = manager?.expressions || Object.values(manager?.expressionMap || {});
+      const seen = new Set();
+      for (const expression of expressionList) {
+        const sourceName = expression?.expressionName;
+        const name = normalizedExpressionName(avatar, sourceName);
+        if (!name || seen.has(name) || expressions.length >= MAX_REMOTE_EXPRESSIONS) continue;
+        const weight = Number(manager?.getValue?.(sourceName));
+        if (!Number.isFinite(weight)) continue;
+        seen.add(name);
+        expressions.push([name, Number(Math.max(0, Math.min(1, weight)).toFixed(4))]);
+      }
+
+      return {
+        version: STUDIO_LINK_POSE_VERSION,
+        rig: 'vrm-normalized',
+        bones,
+        hips,
+        expressions
+      };
+    }
+
+    if (avatar.bones_by_name) {
+      const bones = [];
+      for (const boneName of MMD_STREAM_BONES) {
+        const tuple = finiteQuaternionTuple(avatar.bones_by_name[boneName]?.quaternion);
+        if (tuple) bones.push([boneName, ...tuple]);
+      }
+      return {
+        version: STUDIO_LINK_POSE_VERSION,
+        rig: 'mmd',
+        bones,
+        hips: null,
+        expressions: []
+      };
+    }
+
+    return null;
+  }
+
+  async function listAvatars() {
+    try {
+      const res = await fetch('/__xra_avatars', { cache: 'no-store' });
+      if (res.ok) {
+        const data = await res.json();
+        return Array.isArray(data.files) ? data.files : [];
+      }
+    } catch (_) {}
+    return [];
+  }
+
+  function sanitizeRemotePose(payload) {
+    if (!payload || Number(payload.version) !== STUDIO_LINK_POSE_VERSION) return null;
+    const rig = payload.rig === 'mmd' ? 'mmd' : 'vrm-normalized';
+    const bones = new Map();
+
+    if (Array.isArray(payload.bones)) {
+      for (const entry of payload.bones.slice(0, MAX_REMOTE_BONES)) {
+        if (!Array.isArray(entry) || entry.length < 5) continue;
+        const name = String(entry[0] || '').slice(0, 80);
+        const tuple = entry.slice(1, 5).map(Number);
+        if (!name || !tuple.every(Number.isFinite)) continue;
+        const length = Math.hypot(...tuple);
+        if (length < 1e-8) continue;
+        bones.set(name, tuple.map(value => value / length));
+      }
+    }
+
+    let hips = null;
+    if (Array.isArray(payload.hips) && payload.hips.length >= 3) {
+      const values = payload.hips.slice(0, 3).map(Number);
+      if (values.every(Number.isFinite)) {
+        hips = values.map(value => Math.max(-10, Math.min(10, value)));
+      }
+    }
+
+    const expressions = new Map();
+    if (Array.isArray(payload.expressions)) {
+      for (const entry of payload.expressions.slice(0, MAX_REMOTE_EXPRESSIONS)) {
+        if (!Array.isArray(entry) || entry.length < 2) continue;
+        const name = String(entry[0] || '').slice(0, 100);
+        const weight = Number(entry[1]);
+        if (name && Number.isFinite(weight)) {
+          expressions.set(name, Math.max(0, Math.min(1, weight)));
+        }
+      }
+    }
+
+    return {
+      rig,
+      bones,
+      hips,
+      expressions,
+      seq: Number.isFinite(Number(payload.seq)) ? Number(payload.seq) : 0,
+      receivedAt: performance.now()
+    };
+  }
+
+  function remoteAvatarRoot(model) {
+    return model?._studioLinkRoot || model?.mesh || model?.model?.scene || model?.scene || null;
+  }
+
+  function disposeRemoteAvatar(model) {
+    const root = remoteAvatarRoot(model);
+    if (!root) return;
+    try { root.parent?.remove(root); } catch (_) {}
+    try { window.MMD_SA?.THREEX?.utils?.dispose?.(root); } catch (error) {
+      console.warn(TAG, 'remote avatar dispose failed:', error);
+    }
+  }
+
+  const secondAvatarManager = {
+    active: false,
+    model: null,
+    _modelKey: '',
+    _loadingKey: '',
+    _loadingPromise: null,
+    _loadGeneration: 0,
+    _failedKey: '',
+    _retryAfter: 0,
+    _lastLoadError: null,
+    _remoteStreamId: '',
+    _lastSequence: -1,
+    _lastPoseAt: 0,
+    _latestPose: null,
+    _firstPosePending: false,
+    _resetPhysicsPending: false,
+    _tempQuaternion: null,
+
+    _source(srcToLoad) {
+      const configured = String(srcToLoad || config.second_avatar?.vrm_path || 'AliciaSolid').trim();
+      if (!configured || configured === 'AliciaSolid') {
+        const base = String(window.System?.Gadget?.path || '').replace(/\/+$/, '');
+        const fallback = window.MMD_SA_options?.THREEX_options?.model_path || '';
+        return {
+          key: 'AliciaSolid',
+          url: base ? base + '/three.js/model/AliciaSolid.zip#/AliciaSolid.vrm' : fallback
+        };
+      }
+      if (/^(?:https?:|blob:|file:)/i.test(configured) || configured.includes('/')) {
+        return { key: configured, url: configured };
+      }
+      const url = new URL('/__xra_avatar/' + encodeURIComponent(configured), location.href);
+      url.searchParams.set('xra_reload', String(Date.now()));
+      return { key: configured, url: url.href };
+    },
+
+    async loadModel(srcToLoad, { force = false } = {}) {
+      const threeX = window.MMD_SA?.THREEX;
+      if (!threeX?.VRM?.load || !threeX?.scene) {
+        throw new Error('Renderer VRM non ancora pronto');
+      }
+
+      const source = this._source(srcToLoad);
+      if (!source.url) throw new Error('Percorso VRM remoto non disponibile');
+      if (this._loadingPromise && this._loadingKey === source.key) {
+        return this._loadingPromise;
+      }
+      if (!force && this._failedKey === source.key && performance.now() < this._retryAfter) {
+        throw this._lastLoadError || new Error(`Avatar remoto “${source.key}” temporaneamente non disponibile`);
+      }
+
+      const generation = ++this._loadGeneration;
+      this._loadingKey = source.key;
+      events.emit('second-avatar-loading', { loading: true, name: source.key });
+
+      const loadPromise = (async () => {
+        const loaded = await threeX.VRM.load(source.url, {
+          vrm_index: -1,
+          detached: true,
+          get_parent: function() { return null; },
+          update: function() {}
+        });
+        if (!loaded?.model?.humanoid || !remoteAvatarRoot(loaded)) {
+          disposeRemoteAvatar(loaded);
+          throw new Error('Il file selezionato non contiene un avatar VRM valido');
+        }
+        if (generation !== this._loadGeneration) {
+          disposeRemoteAvatar(loaded);
+          throw new Error('Caricamento sostituito da una richiesta più recente');
+        }
+
+        // Keep the VRM scene's own basis transform intact (VRM 0 avatars use a
+        // 180-degree root rotation).  Studio Link offsets live on a dedicated
+        // parent so changing X/Y/Z or yaw cannot twist the model itself.
+        const RuntimeThree = getRuntimeThree();
+        if (!RuntimeThree?.Group) {
+          disposeRemoteAvatar(loaded);
+          throw new Error('Renderer THREE moderno non disponibile');
+        }
+        const root = new RuntimeThree.Group();
+        root.name = 'XRA_StudioLink_RemoteAvatar';
+        root.add(loaded.mesh);
+        loaded._studioLinkRoot = root;
+        root.matrixAutoUpdate = true;
+        root.visible = false;
+        root.traverse?.(child => {
+          child.frustumCulled = false;
+        });
+
+        const humanoid = loaded.model.humanoid;
+        humanoid.autoUpdateHumanBones = true;
+        humanoid.resetNormalizedPose?.();
+
+        const previous = this.model;
+        this.model = loaded;
+        this._modelKey = source.key;
+        this._failedKey = '';
+        this._retryAfter = 0;
+        this._lastLoadError = null;
+        threeX.scene.add(root);
+        this.applyPosition(true);
+        root.visible = !!(this.active && this._latestPose);
+        this._firstPosePending = true;
+        this._resetPhysicsPending = true;
+        if (previous && previous !== loaded) disposeRemoteAvatar(previous);
+
+        events.emit('second-avatar-model', { name: source.key, loaded: true });
+        events.emit('second-avatar-status', {
+          active: this.active,
+          connected: this.active,
+          model: source.key
+        });
+        return loaded;
+      })();
+
+      this._loadingPromise = loadPromise;
+      try {
+        return await loadPromise;
+      } catch (error) {
+        if (generation === this._loadGeneration) {
+          this._failedKey = source.key;
+          this._retryAfter = performance.now() + 10000;
+          this._lastLoadError = error instanceof Error ? error : new Error(String(error));
+          events.emit('second-avatar-error', {
+            name: source.key,
+            message: error?.message || String(error)
+          });
+        }
+        throw error;
+      } finally {
+        if (this._loadingPromise === loadPromise) {
+          this._loadingPromise = null;
+          this._loadingKey = '';
+          events.emit('second-avatar-loading', { loading: false, name: source.key });
+        }
+      }
+    },
+
+    async ensureModel(srcToLoad) {
+      const source = this._source(srcToLoad);
+      if (this.model && this._modelKey === source.key) return this.model;
+      try {
+        return await this.loadModel(srcToLoad);
+      } catch (error) {
+        // Automatic Studio Link startup must not hammer a missing URL on every
+        // incoming mocap frame. A manually selected avatar still reports its
+        // error to the picker; only the saved automatic choice falls back.
+        if (srcToLoad != null || source.key === 'AliciaSolid') throw error;
+        config.second_avatar ||= {};
+        config.second_avatar.vrm_path = 'AliciaSolid';
+        events.emit('second-avatar-fallback', {
+          missing: source.key,
+          fallback: 'AliciaSolid',
+          message: error?.message || String(error)
+        });
+        const tr = source => XRA.i18n?.t?.(source) || source;
+        XRA.toast(`${tr('Remote avatar')} “${source.key}” ${tr('unavailable: using AliciaSolid.')}`, 'error', 5000);
+        try { await XRA.profileService.save(0); } catch (_) {}
+        return this.loadModel('AliciaSolid', { force: true });
+      }
+    },
+
+    async startSession(payload = {}) {
+      const streamId = String(payload.streamId || '');
+      this.active = true;
+      this._remoteStreamId = streamId;
+      this._lastSequence = -1;
+      this._lastPoseAt = performance.now();
+      this._latestPose = null;
+      this._firstPosePending = true;
+      const root = remoteAvatarRoot(this.model);
+      if (root) root.visible = false;
+      events.emit('second-avatar-status', {
+        active: true,
+        connected: true,
+        awaitingPose: true,
+        model: this._modelKey
+      });
+
+      try {
+        await this.ensureModel();
+      } catch (error) {
+        if (this.active && (!streamId || this._remoteStreamId === streamId)) {
+          const tr = source => XRA.i18n?.t?.(source) || source;
+          XRA.toast(`${tr('Remote avatar')}: ${error?.message || error}`, 'error', 6000);
+        }
+      }
+    },
+
+    applyRemotePose(payload) {
+      if (!this.active) return false;
+      const streamId = String(payload?.streamId || '');
+      if (this._remoteStreamId && streamId !== this._remoteStreamId) return false;
+
+      const pose = sanitizeRemotePose(payload);
+      if (!pose || pose.seq <= this._lastSequence) return false;
+      const isFirstPose = !this._latestPose;
+      this._lastSequence = pose.seq;
+      this._lastPoseAt = pose.receivedAt;
+      this._latestPose = pose;
+      if (isFirstPose) {
+        this._firstPosePending = true;
+        events.emit('second-avatar-status', {
+          active: true,
+          connected: true,
+          awaitingPose: false,
+          model: this._modelKey
+        });
+      }
+      if (!this.model && !this._loadingPromise) {
+        this.ensureModel().catch(() => {});
+      }
+      return true;
+    },
+
+    stopSession(payload = {}) {
+      const force = !!payload.force;
+      const streamId = String(payload.streamId || '');
+      if (!force && this._remoteStreamId && streamId && streamId !== this._remoteStreamId) {
+        return false;
+      }
+
+      this.active = false;
+      this._remoteStreamId = '';
+      this._lastSequence = -1;
+      this._lastPoseAt = 0;
+      this._latestPose = null;
+      this._firstPosePending = false;
+      const root = remoteAvatarRoot(this.model);
+      if (root) root.visible = false;
+      events.emit('second-avatar-status', {
+        active: false,
+        connected: false,
+        reason: payload.reason || 'stopped',
+        model: this._modelKey
+      });
+      return true;
+    },
+
+    applyPosition(forcePhysicsReset = false) {
+      const root = remoteAvatarRoot(this.model);
+      if (!root?.position) return false;
+
+      const baseOrigin = getAvatarBaseOrigin();
+      const x = baseOrigin.x + Number(config.second_avatar?.offset_x ?? 12.0);
+      const y = baseOrigin.y + Number(config.second_avatar?.offset_y ?? 0.0);
+      const z = baseOrigin.z + Number(config.second_avatar?.offset_z ?? 0.0);
+      const yaw = clampAvatarYaw(config.second_avatar?.rotation_y, -15) * Math.PI / 180;
+      if (![x, y, z, yaw].every(Number.isFinite)) return false;
+
+      const distance = Math.hypot(root.position.x - x, root.position.y - y, root.position.z - z);
+      const yawDelta = Math.abs(root.rotation.y - yaw);
+      if (distance < 1e-6 && yawDelta < 1e-6) return true;
+
+      root.position.set(x, y, z);
+      root.rotation.y = yaw;
+      root.updateMatrix?.();
+      root.updateMatrixWorld?.(true);
+      root.matrixWorldNeedsUpdate = true;
+      if (forcePhysicsReset || distance > 0.25 || yawDelta > 0.05) {
+        this._resetPhysicsPending = true;
+      }
+      return true;
+    },
+
+    update(deltaSeconds) {
+      const model = this.model;
+      const root = remoteAvatarRoot(model);
+
+      if (!this.active) {
+        if (root) root.visible = false;
+        return;
+      }
+      if (this._lastPoseAt && performance.now() - this._lastPoseAt > REMOTE_POSE_TIMEOUT_MS) {
+        this._lastPoseAt = 0;
+        this._latestPose = null;
+        this._firstPosePending = true;
+        if (root) root.visible = false;
+        events.emit('second-avatar-status', {
+          active: true,
+          connected: true,
+          awaitingPose: true,
+          reason: 'pose-timeout',
+          model: this._modelKey
+        });
+        return;
+      }
+      if (!model?.model || !root) return;
+
+      const pose = this._latestPose;
+      root.visible = !!pose;
+      if (!pose) return;
+
+      this.applyPosition();
+      const THREE = getRuntimeThree();
+      if (!this._tempQuaternion && THREE?.Quaternion) {
+        this._tempQuaternion = new THREE.Quaternion();
+      }
+      const targetQuaternion = this._tempQuaternion;
+      const dt = Math.max(1 / 240, Math.min(0.1, Number(deltaSeconds) || 1 / 60));
+      const alpha = this._firstPosePending ? 1 : 1 - Math.exp(-28 * dt);
+
+      if (targetQuaternion) {
+        for (const [boneName, tuple] of pose.bones) {
+          let node = null;
+          if (pose.rig === 'vrm-normalized') {
+            node = normalizedBoneNode(model, boneName);
+            targetQuaternion.fromArray(tuple);
+            // Studio Link transports a VRM-version-independent canonical pose.
+            // VRM 0 normalized rigs still use the legacy X/Z handedness, so
+            // convert back for the concrete receiving avatar.
+            model.process_rotation?.(targetQuaternion, boneName);
+          } else {
+            node = model.get_bone_by_MMD_name?.(boneName) || null;
+            targetQuaternion.fromArray(tuple);
+            const vrmName = model.bone_map_MMD_to_VRM?.[boneName];
+            if (vrmName) model.process_rotation?.(targetQuaternion, vrmName);
+          }
+          if (node?.quaternion) node.quaternion.slerp(targetQuaternion, alpha);
+        }
+      }
+
+      if (pose.rig === 'vrm-normalized' && pose.hips) {
+        const hipsNode = normalizedBoneNode(model, 'hips');
+        const rest = model.model.humanoid?.normalizedRestPose?.hips?.position;
+        if (hipsNode?.position && rest && rest.length >= 3) {
+          const hipsX = model.is_VRM1 === false ? -pose.hips[0] : pose.hips[0];
+          const hipsZ = model.is_VRM1 === false ? -pose.hips[2] : pose.hips[2];
+          const targetX = Number(rest[0]) + hipsX;
+          const targetY = Number(rest[1]) + pose.hips[1];
+          const targetZ = Number(rest[2]) + hipsZ;
+          hipsNode.position.x += (targetX - hipsNode.position.x) * alpha;
+          hipsNode.position.y += (targetY - hipsNode.position.y) * alpha;
+          hipsNode.position.z += (targetZ - hipsNode.position.z) * alpha;
+        }
+      }
+
+      const expressionManager = model.model.expressionManager;
+      const expressionList = expressionManager?.expressions || Object.values(expressionManager?.expressionMap || {});
+      for (const expression of expressionList) {
+        const localName = expression?.expressionName;
+        if (!localName) continue;
+        const canonicalName = normalizedExpressionName(model, localName);
+        const target = pose.expressions.get(canonicalName) ?? 0;
+        const current = Number(expressionManager.getValue?.(localName) || 0);
+        expressionManager.setValue?.(localName, current + (target - current) * alpha);
+      }
+
+      if (this._resetPhysicsPending) {
+        this._resetPhysicsPending = false;
+        try { model.model.springBoneManager?.reset?.(); } catch (_) {}
+      }
+      try {
+        if (typeof model.model._update_XRA === 'function') {
+          model.model._update_XRA(dt);
+        } else {
+          model.model.humanoid?.update?.();
+          model.model.expressionManager?.update?.();
+        }
+      } catch (error) {
+        console.warn(TAG, 'remote avatar update failed:', error);
+      }
+
+      root.updateMatrix?.();
+      root.updateMatrixWorld?.(true);
+      this._firstPosePending = false;
+    },
+
+    get status() {
+      return {
+        active: this.active,
+        model: this._modelKey,
+        loading: !!this._loadingPromise,
+        streamId: this._remoteStreamId
+      };
+    }
+  };
+
+  function getSecondAvatarModel() {
+    return secondAvatarManager.model;
+  }
+
+  function applySecondAvatarPosition() {
+    return secondAvatarManager.applyPosition();
+  }
+
+  XRA.secondAvatar = secondAvatarManager;
 
   function updateStageTransform() {
     if (!activeStageMesh) return;
@@ -1276,6 +1889,10 @@
   window.addEventListener('SA_MMD_before_render', () => {
     updateHeldProps();
     applyAvatarPosition();
+    const frameMs = typeof RAF_timestamp_delta !== 'undefined'
+      ? Number(RAF_timestamp_delta)
+      : 16.67;
+    secondAvatarManager.update(frameMs / 1000);
   });
   window.addEventListener('wheel', (e) => {
     if (isUiElement(e.target)) {
@@ -1286,6 +1903,7 @@
   events.on('profile-loaded', () => {
     applyStage();
     applyAvatarPosition();
+    applySecondAvatarPosition();
     setupTrackballCamera();
     if (config.object_tracking?.enabled) {
       initDefaultProps().then(() => {
@@ -1297,11 +1915,16 @@
     }
   });
 
+
   XRA.stage = {
     apply: applyStage,
     updateTransform: updateStageTransform,
     applyStageLights,
+    avatarYawRange: Object.freeze({ min: AVATAR_YAW_MIN_DEG, max: AVATAR_YAW_MAX_DEG }),
     applyAvatarPosition,
+    applySecondAvatarPosition,
+    getSecondAvatarModel,
+    getLocalAvatarPose,
     getAvatarBaseOrigin,
     getAvatarBasePosition,
     frameCamera: resetCameraToDefault,
@@ -1319,6 +1942,7 @@
     applyManualAttaches,
     listStages,
     listProps,
+    listAvatars,
     loadProp,
     attachPropToHand,
     detachProp,

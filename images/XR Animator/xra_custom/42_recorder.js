@@ -86,6 +86,11 @@
     return config.recorder;
   }
 
+  function audioOnlyVariant() {
+    const value = String(cfg().audio_only_variant || 'both').toLowerCase();
+    return ['processed', 'raw', 'both'].includes(value) ? value : 'both';
+  }
+
   function humanBytes(bytes) {
     bytes = Number(bytes || 0);
     if (!Number.isFinite(bytes) || bytes <= 0) return bytes === 0 ? '0 B' : '—';
@@ -274,7 +279,7 @@
   function beginChromaSafe() {
     chromaFxRestore = null;
     const c = cfg();
-    if (!c.chroma_safe || config.background?.mode !== 'color') return;
+    if ((c.mode || 'video_audio') === 'audio' || !c.chroma_safe || config.background?.mode !== 'color') return;
     const ppe = window.MMD_SA?.THREEX?.PPE;
     if (!ppe) return;
     chromaFxRestore = {};
@@ -619,8 +624,13 @@
     activeRenderHook = renderComposite;
 
     drawInterval = setInterval(() => {
-      if (recordingCanvas && (performance.now() - last > interval * 1.5)) {
-        renderComposite(performance.now());
+      if (!recordingCanvas || performance.now() - last <= interval * 1.5) return;
+      // A WebGL canvas without preserveDrawingBuffer can already be transparent
+      // between two real renders. Re-reading it here used to produce isolated,
+      // full-frame chroma-green flashes. Keep the last valid composite and ask
+      // captureStream to repeat that frame until the next post-render hook.
+      if (activeVideoTrack && typeof activeVideoTrack.requestFrame === 'function') {
+        try { activeVideoTrack.requestFrame(); } catch (_) {}
       }
     }, Math.floor(interval));
 
@@ -686,8 +696,12 @@
     activeRenderHook = renderComposite;
 
     drawInterval = setInterval(() => {
-      if (recordingCanvas && (performance.now() - last > interval * 1.5)) {
-        renderComposite(performance.now());
+      if (!recordingCanvas || performance.now() - last <= interval * 1.5) return;
+      // Never sample the WebGL buffer outside its completed render callback.
+      // Repeating the retained 2D frame is safe and prevents transparent-source
+      // reads from becoming a one-frame solid background flash.
+      if (activeVideoTrack && typeof activeVideoTrack.requestFrame === 'function') {
+        try { activeVideoTrack.requestFrame(); } catch (_) {}
       }
     }, Math.floor(interval));
 
@@ -748,6 +762,12 @@
       events.emit('recording-gate', { db, open: gateOpen, thresholdDb });
     }, 25);
     return gateDestination.stream;
+  }
+
+  async function createRawAudioStream() {
+    const c = cfg();
+    const engine = await XRA.audioEngine.ensure({ profile: c.audio_profile || 'podcast' });
+    return new MediaStream(engine.stream.getAudioTracks());
   }
 
   function expandedFilename(extra = '') {
@@ -849,7 +869,11 @@
     const wantAudio = mode !== 'video';
     if (!reuseStream) {
       const videoStream = wantVideo ? await createSelectedVideoStream() : null;
-      const audio = wantAudio ? await createAudioStream() : null;
+      const audio = wantAudio
+        ? (mode === 'audio' && audioOnlyVariant() === 'raw'
+          ? await createRawAudioStream()
+          : await createAudioStream())
+        : null;
       outputStream = buildOutputStream(videoStream, audio);
     }
     if (!outputStream?.getTracks?.().length) throw new Error('No recording tracks available');
@@ -882,7 +906,11 @@
 
   async function startRawBackup() {
     const c = cfg();
-    if (!c.raw_audio_backup || c.mode === 'video') return;
+    const mode = c.mode || 'video_audio';
+    const needed = mode === 'audio'
+      ? audioOnlyVariant() === 'both'
+      : mode !== 'video' && !!c.raw_audio_backup;
+    if (!needed) return;
     const rawFormat = String(c.raw_audio_format || 'flac').toLowerCase();
     // Same policy as the main recorder: capture first, finalize server-side.
     // A failed conversion keeps the source audio instead of blocking REC.
@@ -984,13 +1012,20 @@
     h.root.classList.toggle('finalizing', !!state.finalizing);
     h.time.textContent = humanTime(state.elapsed_ms);
     const c = cfg();
-    const nativeXr = state.capture_strategy === 'native_xr';
+    const tr = source => XRA.i18n?.t?.(source) || source;
+    const variant = audioOnlyVariant();
+    const variantLabel = variant === 'raw'
+      ? tr('RAW')
+      : variant === 'both'
+        ? tr('Processed + RAW')
+        : tr('Processed');
+    const audioOnlyLabel = tr('Audio only');
     const videoLine = c.mode === 'audio'
-      ? 'Audio only'
+      ? `${audioOnlyLabel} · ${variantLabel}`
       : `${c.width}×${c.height} @ ${c.fps} FPS · ${(Number(c.video_bps || 0) / 1e6).toFixed(1)} Mbps`;
     const audioLine = c.mode === 'video'
-      ? 'No audio'
-      : `Audio ${(Number(c.audio_bps || 0) / 1000).toFixed(0)} kbps · ${c.audio_profile === 'call' ? 'Call' : 'Podcast'}${c.noise_gate ? ` · Gate ${Number(c.gate_threshold_db ?? -48)} dB (${state.gate_open ? 'OPEN' : 'CLOSED'})` : ''}`;
+      ? tr('No audio')
+      : `Audio ${(Number(c.audio_bps || 0) / 1000).toFixed(0)} kbps · ${c.audio_profile === 'call' ? tr('Call') : tr('Podcast')}${c.noise_gate && !(c.mode === 'audio' && variant === 'raw') ? ` · Gate ${Number(c.gate_threshold_db ?? -48)} dB (${state.gate_open ? 'OPEN' : 'CLOSED'})` : ''}`;
     const free = state.free_bytes == null ? '' : ` · disk ${humanBytes(state.free_bytes)} free`;
     const raw = state.raw_path ? `\nRAW mic: ${state.raw_path}` : '';
     const sourceName = nativeXr ? 'XR native output' : (state.capture_strategy === 'classic_v74' ? 'Classic output' : 'Clean scene');
@@ -1238,7 +1273,10 @@
   function estimateBytes(minutes = 60) {
     const c = cfg();
     const video = c.mode === 'audio' ? 0 : Number(c.video_bps || 0);
-    const audio = c.mode === 'video' ? 0 : Number(c.audio_bps || 0);
+    let audioTracks = c.mode === 'video' ? 0 : 1;
+    if (c.mode === 'audio' && audioOnlyVariant() === 'both') audioTracks = 2;
+    else if (c.mode !== 'audio' && c.mode !== 'video' && c.raw_audio_backup) audioTracks = 2;
+    const audio = Number(c.audio_bps || 0) * audioTracks;
     return (video + audio) * Math.max(0, Number(minutes || 0)) * 60 / 8;
   }
 

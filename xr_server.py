@@ -131,12 +131,16 @@ DEFAULT_CUSTOM = {
     "visual_effects": {"UnrealBloom": None, "N8AO": None, "DOF": None},
     "left_settings": {},
     "avatar": {"filename": "", "pose_key": ""},
+    "second_avatar": {
+        "vrm_path": "AliciaSolid", "offset_x": 12.0, "offset_y": 0.0,
+        "offset_z": 0.0, "rotation_y": -15.0,
+    },
     "devices": {
         "mic_device_id": "", "camera_device_id": "", "camera_label": "",
         "mirror_preview": False, "selfie_mode": False,
     },
     "recorder": {
-        "preset": "PODCAST", "mode": "video_audio", "width": 1280, "height": 720, "fps": 30,
+        "preset": "PODCAST", "mode": "video_audio", "audio_only_variant": "both", "width": 1280, "height": 720, "fps": 30,
         "video_bps": 3000000, "audio_bps": 128000, "audio_profile": "podcast",
         "noise_gate": True, "gate_threshold_db": -48, "gate_noise_floor_db": None, "gate_hold_ms": 160, "gate_release_ms": 120,
         "segment_minutes": 0, "output_format": "webm", "output_dir": "",
@@ -384,6 +388,17 @@ def avatar_file(filename):
     except OSError:
         return None
     return None
+
+
+def avatar_files():
+    folder = _avatar_dir()
+    allowed = {".vrm", ".glb"}
+    found = []
+    if folder.exists():
+        for item in sorted(folder.iterdir(), key=lambda p: p.name.casefold()):
+            if item.is_file() and item.suffix.lower() in allowed:
+                found.append(item.name)
+    return found
 
 
 def save_prop_upload(filename, stream, length):
@@ -1423,10 +1438,16 @@ class Handler(SimpleHTTPRequestHandler):
                 return
             try:
                 size = avatar.stat().st_size
+                content_type = {
+                    ".gltf": "model/gltf+json",
+                    ".glb": "model/gltf-binary",
+                    ".vrm": "model/gltf-binary",
+                }.get(avatar.suffix.lower(), "application/octet-stream")
                 self.send_response(200)
-                self.send_header("Content-Type", "model/gltf-binary")
+                self.send_header("Content-Type", content_type)
                 self.send_header("Content-Length", str(size))
                 self.send_header("Content-Disposition", f'inline; filename="{avatar.name}"')
+                self.send_header("Cache-Control", "no-store")
                 self.end_headers()
                 with avatar.open("rb") as handle:
                     shutil.copyfileobj(handle, self.wfile, length=1024 * 1024)
@@ -1466,6 +1487,11 @@ class Handler(SimpleHTTPRequestHandler):
             query = urlparse(self.path).query
             files = background_files(force="refresh=1" in query)
             self.send_json({"files": files, "count": len(files)})
+            return
+
+        if path == "/__xra_avatars":
+            files = avatar_files()
+            self.send_json({"ok": True, "files": files, "count": len(files)})
             return
 
         if path == "/__xra_stages":

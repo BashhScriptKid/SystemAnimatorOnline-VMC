@@ -630,7 +630,11 @@ MMD_SA._click_to_reset = null;
   else if (item.isFileSystem && /([^\/\\]+)\.(vrm)$/i.test(src)) {
     if (MMD_SA.MMD_started) {
       if (MMD_SA.THREEX.enabled) {
-        MMD_SA.THREEX.VRM.load_extra(src);
+        // Loading a VRM is genuinely asynchronous (download/blob decode,
+        // GLTF parse and the model swap on the next animation update).  Let
+        // callers await the complete operation instead of reporting success
+        // as soon as it has merely been scheduled.
+        await MMD_SA.THREEX.VRM.load_extra(src);
       }
       return;
     }
@@ -1104,7 +1108,7 @@ if (scale != 1) {
   cv = c_base.sub(MMD_SA.TEMP_v3.fromArray(MMD_SA_options.camera_position_base)).toArray();
   cv[2] *= MMD_SA_options.Dungeon_options.camera_position_z_sign;
 }
-else if (MMD_SA_options.camera_auto_adjust && ((cv[1] == 0) || this.MMD.motionManager.para_SA.use_mother_bone)) {
+else if (this.camera_auto_adjust_scale_enabled && ((cv[1] == 0) || this.MMD.motionManager.para_SA.use_mother_bone)) {
 
   const modelX = MMD_SA.THREEX.get_model(0);
   let scale_offset = (modelX.para.hip_center.y + modelX.para.spine_length/2) - (11.364640235900879 + 4.97462/2);
@@ -8659,7 +8663,11 @@ this.animation = new Animation(this);
 .update_model()
 */
 
-models[index] = this
+// Detached models are owned by callers such as Studio Link.  They must not be
+// inserted in XR Animator's primary/avatar-swap cache, otherwise a remote VRM
+// can replace (or be replaced by) the local avatar during swap_model().
+if (!para?.detached)
+  models[index] = this
     };
   })();
 
@@ -9239,11 +9247,13 @@ Model_obj.call(this, index, vrm, para);
 this.mesh = vrm.scene;
 
 this._joints_settings = [];
-for ( const e of vrm.springBoneManager.joints ) {
-  this._joints_settings.push(Object.assign({}, e.settings));
+if (vrm.springBoneManager) {
+  for ( const e of vrm.springBoneManager.joints ) {
+    this._joints_settings.push(Object.assign({}, e.settings));
+  }
 }
 
-if (!MMD_SA.MMD_started)
+if (!MMD_SA.MMD_started && !para.detached)
   vrm_list.push(this)
     }
 
@@ -9294,11 +9304,17 @@ return (!use_VRM1) ? (THREE.VRMSchema.HumanoidBoneName[name.charAt(0).toUpperCas
 
 if (this.index > 0) return;
 
+// Spring bones are optional in both VRM 0.x and VRM 1.0.  A perfectly valid
+// avatar without VRMC_springBone must still finish construction and receive
+// humanoid/mocap updates.
+const springBoneManager = this.model.springBoneManager;
+if (!springBoneManager) return;
+
 const restrict_physics = MMD_SA.motion[_THREE.MMD.getModels()[this.index].skin._motion_index].para_SA.mov_speed;
 const settings_default = this._joints_settings;
 // Set has no index
 let i = 0;
-for ( const e of this.model.springBoneManager.joints ) {
+for ( const e of springBoneManager.joints ) {
 // fixed in three-vrm v3.3.0
   const _scale = vrm_scale;//(e.center) ? 1 : vrm_scale;
 //  e.settings.dragForce = (_scale > 1) ? 1 - (1-settings_default[i].dragForce)/_scale : settings_default[i].dragForce/_scale;
@@ -9307,7 +9323,7 @@ for ( const e of this.model.springBoneManager.joints ) {
   i++;
 };
 
-this.model.springBoneManager.reset();
+springBoneManager.reset();
 //this.model.springBoneManager.setInitState();
         }
       },
@@ -10294,7 +10310,7 @@ return rig_map;
       },
 
       load: async function (url, para) {
-if (!MMD_SA.MMD_started)
+if (!MMD_SA.MMD_started && !para?.detached)
   MMD_SA.fn.load_length_extra++
 
 var url_raw = url;
@@ -10314,7 +10330,15 @@ await new Promise((resolve) => {
   }, 'blob', true);
 });
 
-await new Promise((resolve) => {
+return await new Promise((resolve, reject) => {
+
+const rejectLoad = (error) => {
+  if (object_url) {
+    URL.revokeObjectURL(object_url);
+    object_url = null;
+  }
+  reject(error instanceof Error ? error : new Error(String(error)));
+};
 
 GLTF_loader.load(
 
@@ -10323,13 +10347,43 @@ GLTF_loader.load(
 
   // called when the resource is loaded
   (function () {
-    function main(vrm) {
+    function main(vrm, gltf) {
+if (!vrm?.scene || !vrm?.humanoid) {
+  throw new Error('The selected GLB is not a valid VRM humanoid');
+}
 // https://github.com/pixiv/three-vrm/releases/tag/v3.3.0
 THREE.VRMUtils.combineMorphs?.( vrm );
 
 console.log(vrm);
 
 const mesh_obj = vrm.scene
+
+// Some Blender VRM 1.0 exports describe a material with specularFactor=0,
+// omit both the metallic/roughness texture and metallicFactor, and therefore
+// accidentally inherit glTF's metallicFactor default of 1.  Such skin and
+// cloth render much darker than the equivalent VRM 0 model.  Treat this
+// contradictory combination as the dielectric material the exporter meant.
+if (vrm.meta?.metaVersion === '1') {
+  const materialDefs = gltf?.parser?.json?.materials || [];
+  const associations = gltf?.parser?.associations;
+  const fixedMaterials = new Set();
+  mesh_obj.traverse(obj => {
+    const materials = Array.isArray(obj.material) ? obj.material : ((obj.material) ? [obj.material] : []);
+    materials.forEach(material => {
+      if (fixedMaterials.has(material)) return;
+      fixedMaterials.add(material);
+      const materialIndex = associations?.get?.(material)?.materials;
+      const materialDef = materialDefs[materialIndex];
+      const pbr = materialDef?.pbrMetallicRoughness || {};
+      const specular = materialDef?.extensions?.KHR_materials_specular;
+      if (specular?.specularFactor === 0 && pbr.metallicFactor == null && pbr.metallicRoughnessTexture == null && material.metalness != null) {
+        material.metalness = 0;
+        material.needsUpdate = true;
+      }
+    });
+  });
+}
+
 if (MMD_SA_options.use_shadowMap) {
   mesh_obj.traverseVisible(obj=>{
     if (obj.isMesh) obj.castShadow = true;
@@ -10343,10 +10397,13 @@ mesh_obj.traverse( ( obj ) => {
 } );
 
 // headless_mode
-if (!MMD_SA.MMD_started && !MMD_SA_options._XRA_headless_mode)
+if (!para.detached && !MMD_SA.MMD_started && !MMD_SA_options._XRA_headless_mode)
   data.scene.add(mesh_obj);
 
-var vrm_obj = new VRM_object(para.vrm_index, vrm, { url:url_raw });
+var vrm_obj = new VRM_object(para.vrm_index, vrm, {
+  url: url_raw,
+  detached: !!para.detached,
+});
 
 vrm_obj.faceBlendshapes_map = {};
 if (vrm.expressionManager.customExpressionMap['CheekPuff']) {
@@ -10449,19 +10506,21 @@ var obj = Object.assign({
   no_scale: true,
 }, para);//, MMD_SA_options.THREEX_options.model_para[model_filename]||{});
 
-obj_list[para.vrm_index] = obj;
+if (!para.detached)
+  obj_list[para.vrm_index] = obj;
 
 if (object_url) {
   URL.revokeObjectURL(object_url)
 }
 
-if (!MMD_SA.MMD_started)
+if (!MMD_SA.MMD_started && !para.detached)
   MMD_SA.fn.setupUI();
 
-resolve();
+resolve(vrm_obj);
     }
 
     return function (gltf) {
+try {
 // https://pixiv.github.io/three-vrm/packages/three-vrm/examples/basic.html
 // calling these functions greatly improves the performance
 THREE.VRMUtils.removeUnnecessaryVertices( gltf.scene );
@@ -10473,11 +10532,14 @@ THREE.VRMUtils.combineSkeletons( gltf.scene );
 if (use_VRM1) {
   // retrieve a VRM instance from gltf
   const vrm = gltf.userData.vrm;
-  main(vrm);
+  main(vrm, gltf);
 }
 else {
   // generate a VRM instance from gltf
-  THREEX.VRM.from(gltf).then(main);
+  THREEX.VRM.from(gltf).then(vrm => main(vrm, gltf)).catch(rejectLoad);
+}
+} catch (error) {
+  rejectLoad(error);
 }
     };
   })(),
@@ -10486,7 +10548,10 @@ else {
   (progress) => {},//console.log('Loading model...', 100.0 * (progress.loaded / progress.total), '%'),
 
   // called when loading has errors
-  (error) => console.error(error)
+  (error) => {
+    console.error(error);
+    rejectLoad(error);
+  }
 
 );
 
@@ -10494,24 +10559,27 @@ else {
       },
 
       load_extra: (()=>{
-        let loading;
+        // XR Animator's GLTF loader and avatar swapper share global state.
+        // Serialize requests, but always keep the chain usable after a failed
+        // model so a retry or a different VRM is not silently ignored.
+        let load_tail = Promise.resolve();
 
-        return async function (src) {
+        return function (src) {
+const vrm_api = this;
+const task = load_tail.catch(()=>{}).then(async ()=>{
 const filename_new = src.replace(/^.+[\/\\]/, '');
 let index_new = threeX.models.findIndex(m=>filename_new == m.model_path.replace(/^.+[\/\\]/, ''));
-if (index_new == 0) return;
-
-if (loading) return;
-loading = true;
+if (index_new == 0) return true;
 
 if (index_new == -1) {
   index_new = threeX.models.length;
 
   if (!MMD_SA_options.THREEX_options.model_path_extra)
-    MMD_SA_options.THREEX_options.model_path_extra;
+    MMD_SA_options.THREEX_options.model_path_extra = [];
   MMD_SA_options.THREEX_options.model_path_extra[index_new-1] = src;
 
-  await threeX.VRM.load(src, {
+  try {
+    await threeX.VRM.load(src, {
 vrm_index: index_new,
 
 get_parent: function () {
@@ -10520,26 +10588,43 @@ get_parent: function () {
 },
 
 update: function () {}
-  });
+    });
+  }
+  catch (error) {
+    // Do not leave a phantom entry behind: it makes later attempts look as
+    // though the failed avatar were already available.
+    if (MMD_SA_options.THREEX_options.model_path_extra[index_new-1] == src)
+      MMD_SA_options.THREEX_options.model_path_extra.splice(index_new-1, 1);
+    throw error;
+  }
 }
 
-loading = false;
-
-this.swap_model(index_new);
+return await vrm_api.swap_model(index_new);
+});
+load_tail = task;
+return task;
         };
       })(),
 
       swap_model: (()=>{
-        let loading = false;
+        let swap_tail = Promise.resolve();
         return function (index_new) {
-if ((index_new >= threeX.models.length) || (index_new == 0)) return;
+const target_model = threeX.models[index_new];
+const task = swap_tail.catch(()=>{}).then(()=>{
+  index_new = threeX.models.indexOf(target_model);
+  if (index_new == 0) return true;
+  if ((index_new < 0) || (index_new >= threeX.models.length)) return false;
 
-if (loading) return;
-loading = true;
+  return new Promise((resolve, reject)=>{
+System._browser.on_animation_update.add(()=>{ try {
+  // Another queued swap can reorder the array before this callback runs.
+  index_new = threeX.models.indexOf(target_model);
+  if (index_new == 0) { resolve(true); return; }
+  if (index_new < 0) { resolve(false); return; }
 
-System._browser.on_animation_update.add(()=>{
   if (index_new > 3) {
     const index_last = threeX.models.findIndex(m=>m.index_default==3);
+    if (index_last < 0) throw new Error('No replaceable VRM avatar slot is available');
 
     const model_now = threeX.models[index_last];
     const model_new = threeX.models[index_new];
@@ -10572,20 +10657,31 @@ System._browser.on_animation_update.add(()=>{
 
   const icon = (model_new.is_VRM1) ? model_new.model.meta.thumbnailImage : model_new.model.meta.texture?.source.data;
   if (icon) {
-    const canvas = MMD_SA_options.Dungeon.character.icon;
-    const ctx = canvas.getContext("2d");
-    ctx.drawImage(icon, 0,0,64,64);
-    MMD_SA_options.Dungeon.update_status_bar(true);
+    try {
+      const canvas = MMD_SA_options.Dungeon.character.icon;
+      const ctx = canvas.getContext("2d");
+      ctx.drawImage(icon, 0,0,64,64);
+      MMD_SA_options.Dungeon.update_status_bar(true);
+    } catch (error) { console.warn('VRM thumbnail update failed', error); }
   }
 
   MMD_SA._force_motion_shuffle = true;
 
-  MMD_SA.THREEX.utils.init_body_colliders();
+  try { MMD_SA.THREEX.utils.init_body_colliders(); }
+  catch (error) { console.warn('VRM collider refresh failed', error); }
 
-  threeX.get_model(0).resetPhysics();
+  try { threeX.get_model(0).resetPhysics(); }
+  catch (error) { console.warn('VRM physics reset failed', error); }
 
-  loading = false;
+  resolve(true);
+} catch (error) {
+  reject(error);
+}
 }, 0,0);
+  });
+});
+swap_tail = task;
+return task;
         };
       })(),
 
@@ -14855,7 +14951,7 @@ colliders_for_hands.reset_hit();
 
 let _head_colliders;
 if (modelX.type == 'VRM') {
-  _head_colliders = modelX.model.springBoneManager.colliders.filter(c=>{
+  _head_colliders = (modelX.model.springBoneManager?.colliders || []).filter(c=>{
     if (!c.shape.radius) return false;
 
     let p = c;
