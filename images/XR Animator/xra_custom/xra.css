@@ -73,8 +73,6 @@ html.xra-eco-mode #SL {
   z-index: 900000;
   pointer-events: none;
   overflow: hidden;
-  isolation: isolate;
-  contain: layout style paint;
 }
 
 .xra-mocap-wireframe-front {

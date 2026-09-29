@@ -15,7 +15,7 @@ static void read_gpu_preference(const char *dir, char *gpu_pref, size_t max_len)
 
     FILE *f = fopen(profile_path, "r");
     if (f) {
-        char buf[16384];
+        char buf[65536];
         size_t n = fread(buf, 1, sizeof(buf) - 1, f);
         fclose(f);
         buf[n] = '\0';
@@ -42,9 +42,24 @@ static void add_wayland_flags(char **new_argv, int *next_arg) {
     new_argv[(*next_arg)++] = "--enable-features=AcceleratedVideoDecodeLinuxGL,VaapiVideoDecoder,AcceleratedVideoDecodeLinuxZeroCopyGL";
 }
 
+static void add_anti_throttling_flags(char **new_argv, int *next_arg) {
+    new_argv[(*next_arg)++] = "--disable-background-timer-throttling";
+    new_argv[(*next_arg)++] = "--disable-renderer-backgrounding";
+    new_argv[(*next_arg)++] = "--disable-backgrounding-occluded-windows";
+    new_argv[(*next_arg)++] = "--ignore-gpu-blocklist";
+    new_argv[(*next_arg)++] = "--enable-gpu-rasterization";
+    new_argv[(*next_arg)++] = "--enable-webaudio-input";
+    new_argv[(*next_arg)++] = "--auto-accept-camera-and-microphone-capture";
+    new_argv[(*next_arg)++] = "--autoplay-policy=no-user-gesture-required";
+    new_argv[(*next_arg)++] = "--disable-gpu-vsync";
+    new_argv[(*next_arg)++] = "--disable-frame-rate-limit";
+}
+
 static void apply_gpu_preference(const char *dir, char **new_argv, int *next_arg, int use_wayland) {
     char gpu_pref[64] = "default";
     read_gpu_preference(dir, gpu_pref, sizeof(gpu_pref));
+
+    add_anti_throttling_flags(new_argv, next_arg);
 
     int has_nvidia = 0;
     int amd_count = 0;
@@ -123,6 +138,19 @@ int main(int argc, char *argv[]) {
     char browser_path[PATH_MAX];
     snprintf(browser_path, sizeof(browser_path), "%s/xra_browser", dir);
 
+    if (access(browser_path, X_OK) != 0) {
+        char fallback_dir[PATH_MAX];
+        snprintf(fallback_dir, sizeof(fallback_dir), "%s/release/XR_Animator_Bundled", dir);
+        char fallback_browser[PATH_MAX];
+        snprintf(fallback_browser, sizeof(fallback_browser), "%s/xra_browser", fallback_dir);
+        if (access(fallback_browser, X_OK) == 0) {
+            dir = strdup(fallback_dir);
+            snprintf(browser_path, sizeof(browser_path), "%s", fallback_browser);
+            snprintf(profile_dir, sizeof(profile_dir), "%s/.nw-profile", dir);
+            mkdir(profile_dir, 0755);
+        }
+    }
+
     char user_data_arg[PATH_MAX + 32];
     snprintf(user_data_arg, sizeof(user_data_arg), "--user-data-dir=%s", profile_dir);
 
@@ -132,7 +160,7 @@ int main(int argc, char *argv[]) {
         getenv("WAYLAND_DISPLAY") != NULL ||
         getenv("NIRI_SOCKET") != NULL;
 
-    char **new_argv = malloc((argc + 24) * sizeof(char *));
+    char **new_argv = malloc((argc + 36) * sizeof(char *));
     if (!new_argv) {
         perror("malloc");
         return 1;

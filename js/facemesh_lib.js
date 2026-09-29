@@ -333,7 +333,11 @@ function _onmessage(e) {
 
   if (data.canvas) {
     canvas = data.canvas
-    context = canvas.getContext("2d")
+    try {
+      context = canvas.getContext("2d", { desynchronized: true, alpha: true }) || canvas.getContext("2d")
+    } catch (_e) {
+      context = canvas.getContext("2d")
+    }
   }
 
   if (data.rgba) {
@@ -872,24 +876,12 @@ function is_wireframe_visible() {
 function draw(faces, w,h, options) {
   if (!is_wireframe_visible()) return;
   if (canvas && options.draw_canvas) {
-    // Keep the newest sample, but never cancel a frame which is already
-    // queued. Under a busy GPU/WebGL compositor, repeated worker packets could
-    // otherwise cancel every RAF before it ran, making the preview freeze or
-    // advance in large jumps even though mocap itself remained live.
-    pending_draw_faces = faces;
-    pending_draw_w = w;
-    pending_draw_h = h;
-    if (RAF_timerID) return;
-    RAF_timerID = requestAnimationFrame(function () {
-      RAF_timerID = null
-      if (!is_wireframe_visible()) return;
-      const latest_faces = pending_draw_faces || [];
-      const latest_w = pending_draw_w;
-      const latest_h = pending_draw_h;
-      pending_draw_faces = null;
-      draw_facemesh(latest_faces, latest_w,latest_h);
-      draw_pose();
-    });
+    if (RAF_timerID) {
+      cancelAnimationFrame(RAF_timerID);
+      RAF_timerID = null;
+    }
+    draw_facemesh(faces || [], w, h);
+    draw_pose();
   }
 }
 

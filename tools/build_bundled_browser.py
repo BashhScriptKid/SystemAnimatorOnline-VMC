@@ -90,14 +90,15 @@ def main() -> int:
             shutil.rmtree(TARGET)
         shutil.copytree(BASE_RELEASE, TARGET)
         restore_user_data(staging)
-        # Mirror root assets (stages, avatars, backgrounds, props) so repository changes take precedence
+        # Refresh repository-provided assets without deleting user imports.
+        # These directories are persistent: clearing them here left profile
+        # references (for example a selected VRM) pointing at files that the
+        # rebuild had just removed, causing a 404 on the next startup.
         for asset_name in ("stages", "avatars", "backgrounds", "props"):
             root_asset = ROOT / asset_name
             target_asset = TARGET / asset_name
             if root_asset.is_dir():
-                for existing in target_asset.glob("*"):
-                    if existing.is_file():
-                        existing.unlink()
+                target_asset.mkdir(parents=True, exist_ok=True)
                 for item in root_asset.glob("*"):
                     if item.is_file():
                         shutil.copy2(item, target_asset / item.name)

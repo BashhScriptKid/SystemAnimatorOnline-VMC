@@ -103,7 +103,10 @@ catch (err) {
   if (!is_SA_child_animation) {
     if (use_RAF) {
       DEBUG_show('Use "requestAnimationFrame"', 2)
-      setTimeout('RAF_timerID = requestAnimationFrame(Animate_RAF)', 200)
+      setTimeout(function() {
+        _SA_ensure_heartbeat()
+        _SA_schedule_render()
+      }, 200)
     }
     else {
       Seq.item("Animate").At(0.2, "Animate", -1, 0.1/EV_sync_update.count_to_10fps)
@@ -2642,6 +2645,87 @@ var _SA_worker_active = false
 var _SA_worker_interval = 0
 var _SA_heartbeat_busy = false
 var _SA_fallback_timer = null
+var _SA_raf_generation = 0
+
+function _SA_is_foreground_active() {
+  if (typeof document === 'undefined') return true
+  if (document.hidden) return false
+  return (typeof document.hasFocus !== 'function') || document.hasFocus()
+}
+
+function _SA_cancel_pending_raf() {
+  // Invalidate the callback even when the browser has already dequeued it and
+  // cancelAnimationFrame can no longer prevent its delivery.
+  _SA_raf_generation++
+  if (!RAF_timerID) return
+  if (RAF_is_timeout)
+    clearTimeout(RAF_timerID)
+  else
+    cancelAnimationFrame(RAF_timerID)
+  RAF_timerID = null
+}
+
+function _SA_on_raf_frame(timestamp) {
+  RAF_timerID = null
+  var now = (typeof performance !== 'undefined' ? performance.now() : Date.now())
+  var target_fps = (Number.isFinite(window.XRA_render_fps_limit) && window.XRA_render_fps_limit > 0)
+    ? window.XRA_render_fps_limit
+    : (window.XRA_render_fps_limit === 0 ? 120 : 60)
+  var target_interval = 1000 / target_fps
+
+  // If window is unfocused or RAF callback arrived late (compositor throttling out-of-view window to 1 Hz), switch to timer ticker
+  if (!_SA_is_foreground_active() || (_SA_last_anim_time && (now - _SA_last_anim_time) > (target_interval * 1.8))) {
+    _SA_raf_stalled = true
+    _SA_cancel_pending_raf()
+    _SA_schedule_render()
+    return
+  }
+  if (RAF_timestamp && timestamp <= RAF_timestamp)
+    timestamp = Math.max(now, RAF_timestamp + 0.01)
+  _SA_raf_stalled = false
+  Animate_RAF(timestamp, false)
+}
+
+function _SA_schedule_render() {
+  if (!use_RAF || !EV_sync_update.requestAnimationFrame_auto || EV_sync_update.RAF_paused) {
+    _SA_cancel_pending_raf()
+    return false
+  }
+  _SA_ensure_heartbeat()
+
+  var target_fps = (Number.isFinite(window.XRA_render_fps_limit) && window.XRA_render_fps_limit > 0)
+    ? window.XRA_render_fps_limit
+    : (window.XRA_render_fps_limit === 0 ? 120 : 60)
+  var target_interval = 1000 / target_fps
+
+  if (_SA_is_foreground_active() && !_SA_raf_stalled) {
+    if (RAF_is_timeout) {
+      _SA_cancel_pending_raf()
+    }
+    RAF_is_timeout = false
+    var generation = ++_SA_raf_generation
+    RAF_timerID = requestAnimationFrame(function(timestamp) {
+      if (generation !== _SA_raf_generation) return
+      _SA_on_raf_frame(timestamp)
+    })
+  } else {
+    // OUT OF VIEW / BACKGROUND / STALLED: pass to timer RAF (ticker)
+    if (!RAF_is_timeout) {
+      _SA_cancel_pending_raf()
+    }
+    RAF_is_timeout = true
+    var generation = ++_SA_raf_generation
+    RAF_timerID = setTimeout(function() {
+      if (generation !== _SA_raf_generation) return
+      RAF_timerID = null
+      var now = (typeof performance !== 'undefined' ? performance.now() : Date.now())
+      Animate_RAF(now, false)
+    }, Math.max(4, Math.floor(target_interval)))
+  }
+  return true
+}
+
+var _SA_schedule_foreground_raf = _SA_schedule_render
 
 function _SA_stop_bg_worker() {
   if (_SA_bg_worker && _SA_worker_active) {
@@ -2718,22 +2802,11 @@ function _SA_ensure_heartbeat() {
 }
 
 function _SA_resume_foreground_render() {
+  if (!_SA_is_foreground_active()) return
   _SA_raf_stalled = false
   _SA_last_anim_time = (typeof performance !== 'undefined' ? performance.now() : Date.now())
-  if (use_RAF && EV_sync_update.requestAnimationFrame_auto && !EV_sync_update.RAF_paused) {
-    if (RAF_timerID) {
-      if (RAF_is_timeout)
-        clearTimeout(RAF_timerID)
-      else
-        cancelAnimationFrame(RAF_timerID)
-      RAF_timerID = null
-    }
-    RAF_is_timeout = false
-    RAF_timerID = requestAnimationFrame(function (ts) {
-      _SA_raf_stalled = false
-      Animate_RAF(ts)
-    })
-  }
+  _SA_cancel_pending_raf()
+  _SA_schedule_render()
 }
 
 function _SA_on_heartbeat_tick() {
@@ -2748,52 +2821,44 @@ function _SA_on_heartbeat_tick() {
     : (window.XRA_render_fps_limit === 0 ? 120 : 60)
   var target_interval = 1000 / target_fps
 
-  var is_visible = !document.hidden || (typeof document.hasFocus === 'function' && document.hasFocus())
-  // When visible or focused, threshold is at least 1.5x target interval (giving RAF vsync full priority).
-  // When truly hidden in background, threshold is 0.85x target interval.
-  var stall_threshold = is_visible
-    ? Math.max(22, target_interval * 1.5)
-    : (target_interval * 0.85)
+  var is_fg = _SA_is_foreground_active()
+  // When in foreground with active RAF, threshold is at least 1.5x target interval (giving RAF full priority).
+  // When unfocused, hidden, or RAF has stalled, threshold is 0.85x target interval to maintain steady FPS.
+  var stall_threshold = (!is_fg || _SA_raf_stalled)
+    ? (target_interval * 0.85)
+    : Math.max(22, target_interval * 1.5)
   var elapsed = now - _SA_last_anim_time
 
-  if (!is_visible || elapsed >= stall_threshold) {
+  if (elapsed >= stall_threshold) {
+    _SA_cancel_pending_raf()
     _SA_raf_stalled = true
     _SA_heartbeat_busy = true
     try {
       _SA_last_anim_time = now
-      Animate_RAF(now)
+      Animate_RAF(now, true)
     } catch (err) {
       console.error('[XRA] Background render tick error:', err)
     } finally {
       _SA_heartbeat_busy = false
     }
-  } else if (is_visible && _SA_raf_stalled) {
-    _SA_resume_foreground_render()
   }
 }
 
-var Animate_RAF = function (timestamp) {
+var Animate_RAF = function (timestamp, from_heartbeat) {
   if (timestamp == null)
     timestamp = performance.now()
+  if (RAF_timestamp && timestamp <= RAF_timestamp)
+    timestamp = Math.max(performance.now(), RAF_timestamp + 0.01)
 
   _SA_last_anim_time = timestamp
   _SA_ensure_heartbeat()
 
   if (EV_sync_update.requestAnimationFrame_auto) {
-    var is_visible = !document.hidden || (typeof document.hasFocus === 'function' && document.hasFocus())
-    if (is_visible) {
-      RAF_is_timeout = false
-      RAF_timerID = requestAnimationFrame(function (ts) {
-        _SA_raf_stalled = false
-        Animate_RAF(ts)
-      })
-    } else {
-      RAF_is_timeout = true
-      RAF_timerID = null
-    }
+    _SA_schedule_render()
   }
   else {
     _SA_stop_bg_worker()
+    _SA_cancel_pending_raf()
     RAF_timerID = null
   }
 //RAF_timerID = setTimeout(function () { Animate_RAF(performance.now()) }, 1000/60)
@@ -2823,11 +2888,16 @@ var Animate_RAF = function (timestamp) {
       window._XRA_render_acc = (window._XRA_render_acc || 0) + delta;
     }
     // Half-frame threshold (target_interval * 0.75) absorbs display refresh jitter and avoids harmonic frame-dropping (e.g. 120 FPS on 144Hz)
-    if (window._XRA_render_acc < target_interval * 0.75) {
+    // When driven by heartbeat watchdog or timer RAF, the cadence is already paced, so bypass this to prevent dropped frames from jitter.
+    if (!from_heartbeat && !RAF_is_timeout && window._XRA_render_acc < target_interval * 0.75) {
       return;
     }
-    // Consume one interval, clamping leftover accumulator to at most 1 interval to prevent catch-up bursts
-    window._XRA_render_acc = Math.min(window._XRA_render_acc - target_interval, target_interval);
+    if (from_heartbeat || RAF_is_timeout) {
+      window._XRA_render_acc = 0;
+    } else {
+      // Consume one interval, clamping leftover accumulator to at most 1 interval to prevent catch-up bursts
+      window._XRA_render_acc = Math.min(window._XRA_render_acc - target_interval, target_interval);
+    }
   } else {
     window._XRA_render_acc = 0;
     window._XRA_last_raf_time = timestamp;
@@ -2840,6 +2910,15 @@ var Animate_RAF = function (timestamp) {
 
   if (RAF_timestamp) {
     RAF_timestamp_delta = timestamp - RAF_timestamp + RAF_timestamp_delta_accumulated
+
+    // A worker heartbeat can arrive late when the compositor/browser has put
+    // an occluded window to sleep.  Never feed that entire pause into VRM
+    // mixers and spring-bone physics in one update: it causes the avatar to
+    // jump, overshoot or shake when background execution resumes.
+    if ((from_heartbeat || RAF_is_timeout) && Number.isFinite(xra_frame_rate) && xra_frame_rate > 0) {
+      const heartbeat_max_delta = (1000 / xra_frame_rate) * 2
+      RAF_timestamp_delta = Math.max(0, Math.min(RAF_timestamp_delta, heartbeat_max_delta))
+    }
 
     const legacy_frame_rate = EV_sync_update.count_to_10fps_ * 10
     const xra_overrides_legacy_cap = Number.isFinite(xra_frame_rate)
@@ -2884,16 +2963,26 @@ var Animate_RAF = function (timestamp) {
   }
 }
 
+function _SA_on_blur() {
+  _SA_cancel_pending_raf()
+  _SA_raf_stalled = true
+  _SA_schedule_render()
+}
+
 if (typeof window !== 'undefined') {
   window.addEventListener('focus', _SA_resume_foreground_render, { passive: true })
+  window.addEventListener('blur', _SA_on_blur, { passive: true })
   window.addEventListener('pageshow', _SA_resume_foreground_render, { passive: true })
+  window.addEventListener('pagehide', _SA_on_blur, { passive: true })
   window.addEventListener('pointerdown', _SA_resume_foreground_render, { passive: true })
   window.addEventListener('keydown', _SA_resume_foreground_render, { passive: true })
   try {
     if (window.nw?.Window) {
       var nwWin = nw.Window.get()
       nwWin.on('focus', _SA_resume_foreground_render)
+      nwWin.on('blur', _SA_on_blur)
       nwWin.on('restore', _SA_resume_foreground_render)
+      nwWin.on('minimize', _SA_on_blur)
     }
   } catch (_e) {}
 }
@@ -2901,8 +2990,7 @@ if (typeof window !== 'undefined') {
 if (typeof document !== 'undefined' && document.addEventListener) {
   document.addEventListener('visibilitychange', function () {
     if (document.hidden) {
-      _SA_raf_stalled = true
-      _SA_on_heartbeat_tick()
+      _SA_on_blur()
     } else {
       _SA_resume_foreground_render()
     }
@@ -2987,7 +3075,7 @@ function Animate_core() {
       always_update_event = true
   }
   else if (use_full_fps)
-    update = true
+    update = always_update_event = true
 
   EV_sync_update.no_update_count++
   EV_sync_update.no_animation_count++

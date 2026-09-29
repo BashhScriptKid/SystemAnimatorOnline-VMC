@@ -26,6 +26,90 @@
     } catch (_) {}
   }
 
+  // Ensure background rendering and animations are never throttled or hidden by legacy checks
+  function _xra_prevent_background_throttle() {
+    try {
+      if (window.System?._browser) {
+        const b = window.System._browser;
+        b.skip_background_rendering = false;
+        b.skip_rendering = false;
+        b.skipping_rendering = false;
+
+        // Force rendering_check to always return true (prevent MMD_SA from skipping 3D render)
+        b.rendering_check = function () {
+          return true;
+        };
+
+        // Override overlay_mode so it never forces 1 when occluded/hidden
+        let current_overlay_mode = 0;
+        try {
+          const origDesc = Object.getOwnPropertyDescriptor(b, 'overlay_mode');
+          if (origDesc && origDesc.set) {
+            Object.defineProperty(b, 'overlay_mode', {
+              configurable: true,
+              enumerable: true,
+              get() { return current_overlay_mode; },
+              set(val) {
+                current_overlay_mode = val;
+                try { origDesc.set.call(b, val); } catch (_) {}
+              }
+            });
+          }
+        } catch (_) {}
+
+        // Neutralize System._browser.hidden so legacy subsystems never think window is hidden
+        try {
+          Object.defineProperty(b, 'hidden', {
+            configurable: true,
+            enumerable: true,
+            get() { return false; },
+            set(_) {}
+          });
+        } catch (_) {}
+      }
+
+      if (window.EV_sync_update) {
+        const _fpsControl = function () {
+          try {
+            window.System?._browser?.motion_control?.setMousePosition?.();
+          } catch (e) {}
+          return true;
+        };
+        try {
+          Object.defineProperty(window.EV_sync_update, 'fps_control', {
+            configurable: true,
+            enumerable: true,
+            get() { return _fpsControl; },
+            set(_) {}
+          });
+        } catch (_) {
+          window.EV_sync_update.fps_control = _fpsControl;
+        }
+      }
+
+      if (window.MMD_SA) {
+        try {
+          Object.defineProperty(window.MMD_SA, 'hide_3D_avatar', {
+            configurable: true,
+            enumerable: true,
+            get() { return false; },
+            set(_) {}
+          });
+        } catch (_) {}
+      }
+    } catch (_) {}
+  }
+  _xra_prevent_background_throttle();
+  window.addEventListener('DOMContentLoaded', _xra_prevent_background_throttle);
+  window.addEventListener('load', _xra_prevent_background_throttle);
+  let _xra_throttle_guard_count = 0;
+  const _xra_throttle_guard_timer = setInterval(() => {
+    _xra_prevent_background_throttle();
+    if (++_xra_throttle_guard_count > 30) {
+      clearInterval(_xra_throttle_guard_timer);
+    }
+  }, 500);
+
   const defaults = {
     camera: {
       optimized: true,
@@ -899,9 +983,10 @@
     }
     const canvases = wireframeCanvasCandidates(cam);
     for (const canvas of canvases) {
-      canvas.classList.add('xra-mocap-wireframe-front');
-      canvas.style.setProperty('pointer-events', 'none', 'important');
-      canvas.style.setProperty('will-change', 'contents, transform');
+      if (!canvas.classList.contains('xra-mocap-wireframe-front')) {
+        canvas.classList.add('xra-mocap-wireframe-front');
+        canvas.style.setProperty('pointer-events', 'none', 'important');
+      }
       // A large z-index cannot escape XR Animator's transformed stacking
       // context. Reparent the existing canvas (not a copy) to a top-level
       // overlay so the WebGL stage can never cover it.
@@ -954,8 +1039,8 @@
           vcStyle.left = lStr;
           vcStyle.top = tStr;
         }
-        vcStyle.pixelWidth = o_w;
-        vcStyle.pixelHeight = o_h;
+        if (vcStyle.pixelWidth !== o_w) vcStyle.pixelWidth = o_w;
+        if (vcStyle.pixelHeight !== o_h) vcStyle.pixelHeight = o_h;
       }
 
       for (const wireframeCanvas of ensureMocapWireframeLayer(cam)) {
@@ -974,7 +1059,6 @@
           wf_top = th * (1 + (wf.top != null ? wf.top : -1));
         }
         const fmStyle = wireframeCanvas.style;
-        wireframeCanvas.classList?.add('xra-mocap-wireframe-front');
         const wStr = `${wf_w}px`;
         const hStr = `${wf_h}px`;
         const lStr = `${wf_left}px`;
@@ -985,8 +1069,13 @@
           fmStyle.left = lStr;
           fmStyle.top = tStr;
         }
-        fmStyle.pixelWidth = wf_w;
-        fmStyle.pixelHeight = wf_h;
+        if (display.wireframe?.hidden) {
+          if (fmStyle.visibility !== 'hidden') fmStyle.visibility = 'hidden';
+        } else {
+          if (fmStyle.visibility !== 'inherit' && fmStyle.visibility !== 'visible') fmStyle.visibility = 'inherit';
+        }
+        if (fmStyle.pixelWidth !== wf_w) fmStyle.pixelWidth = wf_w;
+        if (fmStyle.pixelHeight !== wf_h) fmStyle.pixelHeight = wf_h;
       }
     } catch (e) {}
   }
@@ -1139,6 +1228,32 @@
                   calibratePoseScores(pn);
                   if (typeof data === 'string') {
                     Object.defineProperty(event, 'data', { configurable: true, value: parsed });
+                  }
+                  const cam = window.System?._browser?.camera;
+                  const fmWf = cam?.facemesh?.wireframe;
+                  if (fmWf) {
+                    fmWf._skip_frame = false;
+                    if (fmWf._data) fmWf._data.pose = pn;
+                  }
+                  const pnWf = cam?.poseNet?.wireframe;
+                  if (pnWf) {
+                    pnWf._skip_frame = false;
+                    if (pnWf._data) pnWf._data.pose = pn;
+                  }
+                }
+
+                if (parsed.handpose) {
+                  const hp = parsed.handpose;
+                  const cam = window.System?._browser?.camera;
+                  const fmWf = cam?.facemesh?.wireframe;
+                  if (fmWf) {
+                    fmWf._skip_frame = false;
+                    if (fmWf._data) fmWf._data.handpose = hp;
+                  }
+                  const pnWf = cam?.poseNet?.wireframe;
+                  if (pnWf) {
+                    pnWf._skip_frame = false;
+                    if (pnWf._data) pnWf._data.handpose = hp;
                   }
                 }
               }
