@@ -397,18 +397,18 @@ def to_wire(payload: dict, capture_hint: Optional[tuple[int, int]] = None) -> di
                     }
 
                     dist_sh = ((hx - sx) ** 2 * aspect ** 2 + (hy - sy) ** 2) ** 0.5
-                    arm_len = t_span * 0.92
-                    half_d = min(arm_len * 0.49, dist_sh * 0.5)
-                    sagitta = max(0.04, (max(0.0, (arm_len * 0.50) ** 2 - half_d ** 2)) ** 0.5)
+                    arm_len = max(0.40, t_span * 1.55)
+                    half_d = min(arm_len * 0.55, dist_sh * 0.5)
+                    sagitta = max(0.03, (max(0.0, (arm_len * 0.50) ** 2 - half_d ** 2)) ** 0.5)
 
                     dist_se = ((ex - sx) ** 2 * aspect ** 2 + (ey - sy) ** 2) ** 0.5
-                    if el_sc < 0.20 or dist_se > max(t_span * 2.2, 0.60):
-                        side_sign = -1.0 if wrist_idx == 15 else 1.0
-                        # Idea B: smooth anatomical triangular bend when elbow is occluded during active arm motion
+                    if el_sc < 0.20 or dist_se > max(t_span * 2.6, 0.75):
+                        side_sign = (-1.0 if hx < sx else 1.0) if abs(hx - sx) > 0.01 else (1.0 if wrist_idx == 15 else -1.0)
+                        # Smooth anatomical triangular bend when elbow is occluded during active arm motion
                         mx = (sx + hx) * 0.5
                         my = (sy + hy) * 0.5
-                        synth_el_x = _r4(mx + side_sign * (sagitta / aspect if aspect > 0 else sagitta))
-                        synth_el_y = _r4(max(sy + t_span * 0.16, my + t_span * 0.10))
+                        synth_el_x = _r4(mx + side_sign * (sagitta * 1.15 / aspect if aspect > 0 else sagitta * 1.15))
+                        synth_el_y = _r4(max(sy + t_span * 0.18, my + t_span * 0.08))
 
                         keypoints[el_idx] = {
                             "x": synth_el_x, "y": synth_el_y, "z": hz,
@@ -452,8 +452,8 @@ def to_wire(payload: dict, capture_hint: Optional[tuple[int, int]] = None) -> di
                     # Hand is resting low downwards: keep arm calm at rest
                     side_sign = -1.0 if wrist_idx == 15 else 1.0
                     dist_se = ((ex - sx) ** 2 * aspect ** 2 + (ey - sy) ** 2) ** 0.5
-                    if el_sc < 0.20 or dist_se > max(t_span * 2.2, 0.60):
-                        synth_el_x = _r4(sx + side_sign * 0.04)
+                    if el_sc < 0.20 or dist_se > max(t_span * 2.4, 0.65):
+                        synth_el_x = _r4(sx + side_sign * 0.06)
                         synth_el_y = _r4(sy + t_span * 0.50)
                         keypoints[el_idx] = {
                             "x": synth_el_x, "y": synth_el_y, "z": hz,
@@ -462,11 +462,11 @@ def to_wire(payload: dict, capture_hint: Optional[tuple[int, int]] = None) -> di
                         }
                         el_pos = keypoints[el_idx]
                     keypoints[wrist_idx] = {
-                        "x": _r4(sx + side_sign * 0.05),
+                        "x": _r4(sx + side_sign * 0.07),
                         "y": _r4(sy + t_span * 0.85),
                         "z": hz,
                         "score": 0.55, "visibility": 0.55,
-                        "position": {"x": _r4(sx + side_sign * 0.05), "y": _r4(sy + t_span * 0.85), "z": hz}
+                        "position": {"x": _r4(sx + side_sign * 0.07), "y": _r4(sy + t_span * 0.85), "z": hz}
                     }
                     if wrist_idx < len(keypoints3d):
                         keypoints3d[wrist_idx] = {
@@ -625,13 +625,18 @@ def to_wire(payload: dict, capture_hint: Optional[tuple[int, int]] = None) -> di
                 hand_key = "leftHand" if dist_i == 15 else "rightHand"
                 if payload.get(hand_key):
                     continue
+            if dist_i in {13, 14}:
+                hand_key = "leftHand" if dist_i == 13 else "rightHand"
+                if payload.get(hand_key):
+                    continue
             if prox.get("score", 0.5) <= 0 or dist.get("score", 0.5) <= 0:
                 continue
             pp = prox.get("position") or prox
             dp = dist.get("position") or dist
             dx = (_float(pp.get("x")) - _float(dp.get("x"))) * (width / height)
             dy = _float(pp.get("y")) - _float(dp.get("y"))
-            if (dx * dx + dy * dy) > (_max_dist * _max_dist):
+            pair_max_dist = _max_dist * 1.5 if dist_i in {13, 14, 15, 16} else _max_dist
+            if (dx * dx + dy * dy) > (pair_max_dist * pair_max_dist):
                 keypoints[dist_i] = _suppress_joint(keypoints[dist_i])
                 if dist_i < len(keypoints3d):
                     keypoints3d[dist_i] = _suppress_joint(keypoints3d[dist_i])
@@ -673,7 +678,7 @@ def to_wire(payload: dict, capture_hint: Optional[tuple[int, int]] = None) -> di
                     target_lx = mid_x + side * 0.0175
                     target_rx = mid_x - side * 0.0175
 
-                    mix = (0.95 if contact_active else 0.75) * k_contact
+                    mix = (0.98 if contact_active else 0.75) * k_contact
                     new_lx = _r4(_float(lw_3d.get("x")) * (1.0 - mix) + target_lx * mix)
                     new_rx = _r4(_float(rw_3d.get("x")) * (1.0 - mix) + target_rx * mix)
                     new_y = _r4(_float(lw_3d.get("y")) * (1.0 - mix) + mid_y * mix)

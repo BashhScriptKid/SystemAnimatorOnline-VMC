@@ -54,6 +54,9 @@
     lastPoseAt: 0,
     lastPoseFrameId: null,
     lastPoseSummary: null,
+    frontGuard: false,
+    frontClearance: 8,
+    headScale: 100,
   };
   let socketSerial = 0;
 
@@ -405,12 +408,236 @@
       ea.position.x = x; ea.position.y = y; ea.position.z = z;
       ea.score = score; ea.visibility = score;
     }
+    applySpatialLandmarkGuard(_POOL_KP3D, _POOL_KP3D_RAW, _POOL_EA, _POOL_KP, w, h);
     _POOL_XRA_META.frame_id = message.frame_id;
     _POOL_XRA_META.timestamp_ms = message.timestamp_ms;
     _POOL_XRA_META.geometry = message.geometry;
     _POOL_XRA_META.provider = message.provider;
     _POOL_XRA_META.inference_ms = message.ms;
     return _POOL_POSE;
+  }
+
+  function applySpatialLandmarkGuard(kp3D, kp3DRaw, kpEA, kp2D, width, height) {
+    if (!state.frontGuard) return;
+    if (!Array.isArray(kp3D) || kp3D.length < 33) return;
+
+    const sL = kp3D[11]; // left shoulder
+    const sR = kp3D[12]; // right shoulder
+    if (!sL || !sR || !Number.isFinite(sL.x) || !Number.isFinite(sR.x)) return;
+
+    const dx = sL.x - sR.x;
+    const dy = sL.y - sR.y;
+    const dz = sL.z - sR.z;
+    const wSh = Math.sqrt(dx * dx + dy * dy + dz * dz);
+    if (wSh < 0.05 || wSh > 2.0) return;
+
+    // Torso center (midpoint between shoulders)
+    const cx = (sL.x + sR.x) * 0.5;
+    const cy = (sL.y + sR.y) * 0.5;
+    const cz = (sL.z + sR.z) * 0.5;
+
+    // Up vector: towards negative Y (BlazePose: head is -Y, feet are +Y)
+    let ux = 0, uy = -1, uz = 0;
+    const hL = kp3D[23]; // left hip
+    const hR = kp3D[24]; // right hip
+    if (hL && hR && Number.isFinite(hL.x) && Number.isFinite(hR.x)) {
+      const hipCx = (hL.x + hR.x) * 0.5;
+      const hipCy = (hL.y + hR.y) * 0.5;
+      const hipCz = (hL.z + hR.z) * 0.5;
+      const upX = cx - hipCx;
+      const upY = cy - hipCy;
+      const upZ = cz - hipCz;
+      const upLen = Math.sqrt(upX * upX + upY * upY + upZ * upZ);
+      if (upLen > 0.05) {
+        ux = upX / upLen;
+        uy = upY / upLen;
+        uz = upZ / upLen;
+      }
+    }
+
+    // Lateral vector: from right shoulder to left shoulder
+    const rx = dx / wSh;
+    const ry = dy / wSh;
+    const rz = dz / wSh;
+
+    // Forward normal = Lateral x Up (in right-handed frame, points towards camera)
+    let fx = ry * uz - rz * uy;
+    let fy = rz * ux - rx * uz;
+    let fz = rx * uy - ry * ux;
+
+    // Camera is in the -Z direction. Forward normal MUST point towards camera (fz <= 0).
+    if (fz > 0) {
+      fx = -fx; fy = -fy; fz = -fz;
+    }
+    const fLen = Math.sqrt(fx * fx + fy * fy + fz * fz);
+    if (fLen < 1e-4) {
+      fx = 0; fy = 0; fz = -1;
+    } else {
+      fx /= fLen; fy /= fLen; fz /= fLen;
+    }
+
+    // Coronal clearance (user configured, default 8% of shoulder width)
+    const clearancePct = Math.max(0, Math.min(40, Number(state.frontClearance ?? 8)));
+    const clearance = wSh * (clearancePct / 100);
+    const minWristD = clearance;
+    const minElbowD = -wSh * 0.35; // Elbows can flex behind shoulder plane (~35%), relaxed from 22%
+
+    // 1. Constrain Elbows
+    for (const elIdx of [13, 14]) {
+      const p = kp3D[elIdx];
+      if (!p || !Number.isFinite(p.x)) continue;
+      const d = (p.x - cx) * fx + (p.y - cy) * fy + (p.z - cz) * fz;
+      if (d < minElbowD) {
+        const delta = minElbowD - d;
+        p.x += delta * fx;
+        p.y += delta * fy;
+        p.z += delta * fz;
+      }
+    }
+
+    // 2. Constrain Wrists and Hands (Coronal Plane Guard)
+    const armGroups = [
+      { wrist: 15, fingers: [17, 19, 21] }, // Left arm
+      { wrist: 16, fingers: [18, 20, 22] }, // Right arm
+    ];
+
+    for (const group of armGroups) {
+      const wPoint = kp3D[group.wrist];
+      if (!wPoint || !Number.isFinite(wPoint.x)) continue;
+      const d = (wPoint.x - cx) * fx + (wPoint.y - cy) * fy + (wPoint.z - cz) * fz;
+      if (d < minWristD) {
+        const delta = minWristD - d;
+        const shiftX = delta * fx;
+        const shiftY = delta * fy;
+        const shiftZ = delta * fz;
+        wPoint.x += shiftX;
+        wPoint.y += shiftY;
+        wPoint.z += shiftZ;
+
+        // Shift attached fingers to maintain hand coherence
+        for (const fIdx of group.fingers) {
+          const fPoint = kp3D[fIdx];
+          if (fPoint && Number.isFinite(fPoint.x)) {
+            fPoint.x += shiftX;
+            fPoint.y += shiftY;
+            fPoint.z += shiftZ;
+            const fD = (fPoint.x - cx) * fx + (fPoint.y - cy) * fy + (fPoint.z - cz) * fz;
+            if (fD < minWristD) {
+              const fDelta = minWristD - fD;
+              fPoint.x += fDelta * fx;
+              fPoint.y += fDelta * fy;
+              fPoint.z += fDelta * fz;
+            }
+          }
+        }
+      }
+    }
+
+    // 3. Head Sphere Collision Guard
+    const nose = kp3D[0];
+    if (nose && Number.isFinite(nose.x) && Number.isFinite(nose.y)) {
+      const earL = kp3D[7];
+      const earR = kp3D[8];
+      const hx = nose.x;
+      const hy = nose.y - wSh * 0.08;
+      let hz = cz;
+      if (earL && earR && Number.isFinite(earL.z) && Number.isFinite(earR.z)) {
+        hz = (earL.z + earR.z) * 0.5;
+      }
+      const headScale = Math.max(0.5, Math.min(2.5, Number(state.headScale ?? 100) / 100));
+      const headRadius = wSh * 0.32 * headScale + clearance * 0.5;
+      const headRadiusSq = headRadius * headRadius;
+
+      for (const group of armGroups) {
+        const wPoint = kp3D[group.wrist];
+        if (!wPoint || !Number.isFinite(wPoint.x)) continue;
+        const dxW = wPoint.x - hx;
+        const dyW = wPoint.y - hy;
+        const dzW = wPoint.z - hz;
+        const distSq = dxW * dxW + dyW * dyW + dzW * dzW;
+        if (distSq < headRadiusSq) {
+          const dist = Math.sqrt(distSq);
+          let nx = fx, ny = fy, nz = fz;
+          if (dist > 1e-4) {
+            nx = dxW / dist;
+            ny = dyW / dist;
+            nz = dzW / dist;
+          }
+          const targetX = hx + nx * headRadius;
+          const targetY = hy + ny * headRadius;
+          const targetZ = hz + nz * headRadius;
+          const pushX = targetX - wPoint.x;
+          const pushY = targetY - wPoint.y;
+          const pushZ = targetZ - wPoint.z;
+
+          wPoint.x = targetX;
+          wPoint.y = targetY;
+          wPoint.z = targetZ;
+
+          for (const fIdx of group.fingers) {
+            const fPoint = kp3D[fIdx];
+            if (fPoint && Number.isFinite(fPoint.x)) {
+              fPoint.x += pushX;
+              fPoint.y += pushY;
+              fPoint.z += pushZ;
+            }
+          }
+        }
+      }
+    }
+
+    // 4. Sync positions to kp3D.position, kp3DRaw, and kpEA
+    for (let i = 0; i < 33; i++) {
+      const p = kp3D[i];
+      if (p.position) {
+        p.position.x = p.x;
+        p.position.y = p.y;
+        p.position.z = p.z;
+      }
+      if (kp3DRaw && kp3DRaw[i]) {
+        kp3DRaw[i].x = p.x;
+        kp3DRaw[i].y = p.y;
+        kp3DRaw[i].z = p.z;
+        if (kp3DRaw[i].position) {
+          kp3DRaw[i].position.x = p.x;
+          kp3DRaw[i].position.y = p.y;
+          kp3DRaw[i].position.z = p.z;
+        }
+      }
+      if (kpEA && kpEA[i]) {
+        kpEA[i].x = p.x;
+        kpEA[i].y = p.y;
+        kpEA[i].z = p.z;
+        if (kpEA[i].position) {
+          kpEA[i].position.x = p.x;
+          kpEA[i].position.y = p.y;
+          kpEA[i].position.z = p.z;
+        }
+      }
+    }
+
+    // 5. Keep 2D keypoints Z consistent
+    if (Array.isArray(kp2D) && kp2D.length >= 33 && kp2D[11] && kp2D[12]) {
+      const wPx = Number(width) > 0 ? Number(width) : 1;
+      const sh2DZ = (kp2D[11].z + kp2D[12].z) * 0.5;
+      const margin2D = clearance * wPx;
+      for (const group of armGroups) {
+        const k2 = kp2D[group.wrist];
+        if (k2 && Number.isFinite(k2.z) && k2.z > sh2DZ + margin2D) {
+          k2.z = sh2DZ + margin2D;
+          if (k2.position) k2.position.z = k2.z;
+          if (k2.normZ != null && wPx > 0) k2.normZ = k2.z / wPx;
+        }
+        for (const fIdx of group.fingers) {
+          const fk2 = kp2D[fIdx];
+          if (fk2 && Number.isFinite(fk2.z) && fk2.z > sh2DZ + margin2D) {
+            fk2.z = sh2DZ + margin2D;
+            if (fk2.position) fk2.position.z = fk2.z;
+            if (fk2.normZ != null && wPx > 0) fk2.normZ = fk2.z / wPx;
+          }
+        }
+      }
+    }
   }
 
   function consumeLatestPose(width, height) {
@@ -436,6 +663,12 @@
       state.modelComplexity = data.value;
       return;
     }
+    if (data.type === 'front_guard') {
+      state.frontGuard = !!data.value;
+      if (Number.isFinite(Number(data.clearance))) state.frontClearance = Number(data.clearance);
+      if (Number.isFinite(Number(data.head))) state.headScale = Number(data.head);
+      return;
+    }
     if (data.type === 'mocap_rates') return;
     if (data.type === 'xra_native_debug' || data.type === 'xra_debug') {
       state.debug = !!(data.enabled ?? data.value);
@@ -452,6 +685,7 @@
       state.control = new BroadcastChannel(CHANNEL);
       state.control.onmessage = handleControl;
       state.control.postMessage({ type: 'tracker_backend_request' });
+      state.control.postMessage({ type: 'front_guard_request' });
     }
   } catch (_ignored) {}
 
@@ -475,6 +709,7 @@
     },
     maybeReplaceFrame(_rgba, width, height) { return consumeLatestPose(width, height); },
     consumeLatestPose,
+    applySpatialLandmarkGuard,
     setPoseListener(listener) {
       if (typeof listener === 'function') listeners.add(listener);
       return () => listeners.delete(listener);

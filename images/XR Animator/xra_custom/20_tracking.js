@@ -16,14 +16,13 @@
   let bodyStable = false;
   let bodyAnchorMix = 0;
   let bodyTransition = null;
-  let controlChannel = null;
 
   try {
     controlChannel = new BroadcastChannel('XRA_CONTROL');
     controlChannel.onmessage = event => {
       const data = event.data || {};
       if (data.type === 'hands_state_request') broadcastHands();
-      if (data.type === 'tracking_state_request') broadcastTrackingState();
+      if (data.type === 'tracking_state_request' || data.type === 'front_guard_request') broadcastTrackingState();
       if (data.type === 'face_tracking_state') acceptFaceSignal(data);
       if (data.type === 'pose_tracking_state') acceptPoseSignal(data);
       if (data.type === 'hands_tracking_state') acceptHandsSignal(data);
@@ -52,6 +51,12 @@
     controlChannel?.postMessage({
       type: 'motion_hysteresis',
       value: !!(!startupLocksPending && config.tracking?.motion_hysteresis_enabled)
+    });
+    controlChannel?.postMessage({
+      type: 'front_guard',
+      value: !!config.collider?.front_guard,
+      clearance: Number(config.collider?.front_clearance ?? 8),
+      head: Number(config.collider?.head ?? 100)
     });
   }
 
@@ -219,6 +224,7 @@
   // as loss after the first real pose, even when the custom worker channel is
   // unavailable (the common case on slower PCs and some cached builds).
   let nativePoseEverDetected = false;
+  let nativePoseLastDetectedAt = 0; // timestamp of last data_detected > 0, used for inter-frame gap tolerance
   let faceRuntimeSignature = '';
   let faceRuntimeChangedAt = 0;
   let faceRuntimeEverPresent = false;
@@ -297,6 +303,13 @@
   function technicalFaceMeshEvidence(force = false) {
     if (globalThis.XRA?.xraBackend?.active) {
       const snap = globalThis.XRA?.xraBackend?.snapshot?.();
+      const lastFace = snap?.lastPose?.face;
+      if (lastFace && (Array.isArray(lastFace.landmarks) && lastFace.landmarks.length > 0 || (Number(lastFace.faceInViewConfidence) || 0) > 0.2)) {
+        if (performance.now() - (snap.lastPoseAt || 0) < 700) {
+          technicalMeshSample = { available: true, present: true, source: 'backend-pose-face' };
+          return technicalMeshSample;
+        }
+      }
       const snapFace = Number(snap?.capture?.landmarks?.output?.face_points ?? snap?.capture?.landmarks?.raw?.face_points ?? 0);
       if (snapFace > 0) {
         technicalMeshSample = { available: true, present: true, source: 'native-backend' };
@@ -856,7 +869,8 @@
     const modelX = getVRMModelX();
     if (!bones && !modelX) return;
     const now = performance.now();
-    const armList = side === 'Left' ? MMD_LEFT_ARM : MMD_RIGHT_ARM;
+    // Exclude shoulders so hand enter/exit transitions never freeze or drag clavicles
+    const armList = (side === 'Left' ? MMD_LEFT_ARM : MMD_RIGHT_ARM).filter(b => !['左肩', '右肩', '左肩P', '右肩P'].includes(b));
     const transFrom = side === 'Left' ? leftArmTransitionFrom : rightArmTransitionFrom;
 
     transFrom.clear();
@@ -871,7 +885,7 @@
     vrmTransFrom.clear();
     if (modelX?.getBoneNode) {
       const vrmPrefix = side.toLowerCase();
-      const vrmArmList = VRM_ARM_BONES.filter(b => b.startsWith(vrmPrefix));
+      const vrmArmList = VRM_ARM_BONES.filter(b => b.startsWith(vrmPrefix) && !['leftShoulder', 'rightShoulder'].includes(b));
       for (const name of vrmArmList) {
         try {
           const bone = modelX.getBoneNode(name);
@@ -1098,6 +1112,17 @@
           if (tLen < 1e-4) continue;
           tx /= tLen; ty /= tLen; tz /= tLen; tw /= tLen;
 
+          // Clamp twist to ±60° to prevent candy-wrapper mesh deformation
+          const twistAngle = 2 * Math.acos(Math.min(1, Math.abs(tw)));
+          const maxTwist = Math.PI / 3;
+          if (twistAngle > maxTwist) {
+            const s = Math.sin(maxTwist * 0.5) / Math.max(1e-6, Math.sin(twistAngle * 0.5));
+            tx *= s; ty *= s; tz *= s;
+            tw = (tw >= 0 ? 1 : -1) * Math.cos(maxTwist * 0.5);
+            const rLen = Math.hypot(tx, ty, tz, tw);
+            tx /= rLen; ty /= rLen; tz /= rLen; tw /= rLen;
+          }
+
           let hx = tx, hy = ty, hz = tz, hw = tw + 1.0;
           const hLen = Math.hypot(hx, hy, hz, hw);
           if (hLen < 1e-4) continue;
@@ -1140,6 +1165,17 @@
           const tLen = Math.hypot(tx, ty, tz, tw);
           if (tLen < 1e-4) continue;
           tx /= tLen; ty /= tLen; tz /= tLen; tw /= tLen;
+
+          // Clamp twist to ±60° to prevent candy-wrapper mesh deformation
+          const twistAngle = 2 * Math.acos(Math.min(1, Math.abs(tw)));
+          const maxTwist = Math.PI / 3;
+          if (twistAngle > maxTwist) {
+            const s = Math.sin(maxTwist * 0.5) / Math.max(1e-6, Math.sin(twistAngle * 0.5));
+            tx *= s; ty *= s; tz *= s;
+            tw = (tw >= 0 ? 1 : -1) * Math.cos(maxTwist * 0.5);
+            const rLen = Math.hypot(tx, ty, tz, tw);
+            tx /= rLen; ty /= rLen; tz /= rLen; tw /= rLen;
+          }
 
           let hx = tx, hy = ty, hz = tz, hw = tw + 1.0;
           const hLen = Math.hypot(hx, hy, hz, hw);
@@ -1192,44 +1228,35 @@
   }
 
   // Strict anatomical joint limits (relative to parent bone in local skeletal hierarchy)
+  // Uses quaternion total angular deviation (maxTotalDeg) to avoid Euler XYZ gimbal lock / 180° flip discontinuities.
   const ANATOMICAL_LIMITS = {
     // Spine & Chest (Torso)
     spine: {
-      pitch: [-25, 35],
-      yaw:   [-30, 30],
-      roll:  [-20, 20],
+      maxTotalDeg: 40,
     },
     chest: {
-      pitch: [-20, 30],
-      yaw:   [-30, 30],
-      roll:  [-20, 20],
+      maxTotalDeg: 35,
     },
     upperChest: {
-      pitch: [-15, 25],
-      yaw:   [-25, 25],
-      roll:  [-15, 15],
+      maxTotalDeg: 30,
     },
 
     // Neck
     neck: {
-      pitch: [-35, 40],
-      yaw:   [-45, 45],
-      roll:  [-30, 30],
+      maxTotalDeg: 50,
     },
 
     // Head
     head: {
-      pitch: [-35, 35],
-      yaw:   [-50, 50],
-      roll:  [-30, 30],
+      maxTotalDeg: 60,
     },
 
-    // Shoulders: clavicle range of motion
+    // Shoulders: clavicle range of motion (generous threshold to avoid snapping natural movement)
     leftShoulder: {
-      maxTotalDeg: 35,
+      maxTotalDeg: 80,
     },
     rightShoulder: {
-      maxTotalDeg: 35,
+      maxTotalDeg: 80,
     }
   };
 
@@ -1240,9 +1267,7 @@
     '首': 'neck',
     '頭': 'head',
     '左肩': 'leftShoulder',
-    '左肩P': 'leftShoulder',
     '右肩': 'rightShoulder',
-    '右肩P': 'rightShoulder',
   };
 
   const VRM_TO_LIMIT_KEY = {
@@ -1316,12 +1341,16 @@
       }
     }
 
-    // 2. Total angular deviation limit relative to neutral/parent
+    // 2. Total angular deviation limit relative to neutral/parent (hard clamp at boundary, no snap to neutral)
     if (limits.maxTotalDeg && bone.quaternion) {
       const neutralQuat = neutral?.quaternion || (window.THREE?.Quaternion ? new THREE.Quaternion(0, 0, 0, 1) : { x: 0, y: 0, z: 0, w: 1 });
       const totalDeg = quaternionAngleDeg(bone.quaternion, neutralQuat);
       if (totalDeg > limits.maxTotalDeg && totalDeg > 0.01) {
-        bone.quaternion.copy(neutralQuat).slerp(bone.quaternion, limits.maxTotalDeg / totalDeg);
+        const clampedQuat = (window.THREE?.Quaternion ? new THREE.Quaternion() : { x: 0, y: 0, z: 0, w: 1 });
+        if (typeof clampedQuat.copy === 'function') {
+          clampedQuat.copy(neutralQuat).slerp(bone.quaternion, limits.maxTotalDeg / totalDeg);
+          bone.quaternion.copy(clampedQuat);
+        }
         if (bone.rotation) bone.rotation.setFromQuaternion(bone.quaternion, 'XYZ');
       }
     }
@@ -2269,6 +2298,8 @@
 
   function headTrackingEvidence() {
     const face = runtimeFaceTrackingEvidence();
+    if (face.available && face.present) return face;
+
     const technical = technicalFaceMeshEvidence();
     const technicalEvidence = technical.available ? {
         available:true,
@@ -2283,7 +2314,6 @@
       } : null;
 
     if (technicalEvidence?.present) return technicalEvidence;
-    if (face.available && face.present) return face;
 
     const pose = poseHeadTrackingEvidence();
     if (pose.available && pose.strong && !pose.hardLost) {
@@ -2475,6 +2505,8 @@
       const started = nativePoseEverDetected || !!poseRuntime.initial_data_detected;
 
       if (detected) {
+        nativePoseEverDetected = true;
+        nativePoseLastDetectedAt = now;
         return {
           available:true, present:true, strong:true, hardLost:false,
           confidence:null, signature:`native:${Number(poseRuntime.data_detected || 1)}`,
@@ -2486,14 +2518,23 @@
       // additionally covers the runtime's own loss latch. A detector that stops
       // producing frames for 700 ms is also considered lost, which is important
       // when a weak webcam/PC stalls instead of returning an empty result.
-      if (started && (!hasFrameClock || age < 700 || poseRuntime.no_pose_data)) {
+      //
+      // IMPORTANT: When _RAF_timestamp is not set (hasFrameClock=false, always
+      // the case with the native Python backend), data_detected briefly reads
+      // zero between consecutive Python frames (~66ms inter-frame at 15fps).
+      // Without a frame clock we add a 350ms cooldown before declaring loss so
+      // those transient zeros don't trigger applyHeadLossGuard on every frame.
+      const missingGrace = !hasFrameClock ? 350 : 0;
+      const sinceLastSeen = nativePoseLastDetectedAt > 0 ? now - nativePoseLastDetectedAt : Infinity;
+      const withinGrace = sinceLastSeen < missingGrace;
+      if (started && !withinGrace && (!hasFrameClock || age < 700 || poseRuntime.no_pose_data)) {
         return {
           available:true, present:false, strong:false, hardLost:true,
           confidence:0, signature:'native:missing', reason:'native-pose-missing',
           source:'native-pose', at:hasFrameClock ? frameAt : now
         };
       }
-      if (started && age >= 700) {
+      if (started && !withinGrace && age >= 700) {
         return {
           available:true, present:false, strong:false, hardLost:true,
           confidence:0, signature:'native:stalled', reason:'native-pose-stalled',
@@ -2690,6 +2731,40 @@
     return window.System?._browser?.camera?.poseNet?.body_collider || null;
   }
 
+  function isFullBodyMocapPose(manager = window.MMD_SA?.MMD?.motionManager) {
+    return !!(
+      manager &&
+      String(manager.filename || '') === 'stand_simple' &&
+      manager.para_SA?.motion_tracking_upper_body_only === false
+    );
+  }
+
+  function syncColliderModeForPose(manager = window.MMD_SA?.MMD?.motionManager) {
+    config.collider ||= {};
+    const configuredMode = Number(config.collider.mode ?? 0);
+    const collider = bodyCollider();
+    if (!collider) return configuredMode;
+
+    if (configuredMode === 0) {
+      if (collider.mode !== 0) collider.mode = 0;
+      return 0;
+    }
+    const isFull = isFullBodyMocapPose(manager);
+    const effectiveMode = isFull ? (configuredMode === 2 ? 2 : 1) : 1;
+    const changed = Number(collider.mode) !== effectiveMode;
+    if (changed) {
+      collider.mode = effectiveMode;
+      events.emit('collider', {
+        source: 'pose-auto-mode',
+        mode: effectiveMode,
+        configuredMode,
+        full_body_mocap: isFull,
+        motion: manager?.filename || null
+      });
+    }
+    return effectiveMode;
+  }
+
   function applyColliderPreset(name) {
     name = String(name || 'CUSTOM').toUpperCase();
     config.collider ||= {};
@@ -2712,6 +2787,7 @@
         }
       }
       Object.assign(config.collider, { mode: 0, reaction: 'sphere', head: 0, chest: 0, waist: 0, hip: 0 });
+      syncColliderModeForPose();
       events.emit('collider', name);
       return true;
     }
@@ -2720,10 +2796,17 @@
       collider.head.size_percent = preset.head;
       collider.head.reaction_type = preset.reaction;
     }
-    if (collider.chest) collider.chest.size_percent = preset.chest;
-    if (collider.waist) collider.waist.size_percent = preset.waist;
-    if (collider.hip) collider.hip.size_percent = preset.hip;
+    if (collider.chest) {
+      collider.chest.size_percent = preset.chest;
+    }
+    if (collider.waist) {
+      collider.waist.size_percent = preset.waist;
+    }
+    if (collider.hip) {
+      collider.hip.size_percent = preset.hip;
+    }
     Object.assign(config.collider, { mode: preset.mode, reaction: preset.reaction, head: preset.head, chest: preset.chest, waist: preset.waist, hip: preset.hip });
+    syncColliderModeForPose();
     events.emit('collider', name);
     return true;
   }
@@ -2736,11 +2819,16 @@
 
     if (part === 'root') {
       collider[field] = value;
-      if (field === 'mode') config.collider.mode = Number(value);
+      if (field === 'mode') {
+        config.collider.mode = Number(value);
+        syncColliderModeForPose();
+      }
     }
     else if (collider[part]) {
       collider[part][field] = value;
-      if (field === 'size_percent') config.collider[part] = Number(value);
+      if (field === 'size_percent') {
+        config.collider[part] = Number(value);
+      }
       if (part === 'head' && field === 'reaction_type') config.collider.reaction = String(value);
     }
 
@@ -2812,9 +2900,12 @@
           collider.head.reaction_type = config.collider.reaction || 'z_push';
           collider.head.size_percent = Number(config.collider.head ?? 100);
         }
-        for (const part of ['chest','waist','hip']) if (collider[part]) collider[part].size_percent = Number(config.collider[part] ?? 100);
+        for (const part of ['chest','waist','hip']) if (collider[part]) {
+          collider[part].size_percent = Number(config.collider[part] ?? 100);
+        }
       }
     }
+    syncColliderModeForPose();
 
     config.tracking ||= {};
     config.body ||= {};
@@ -2857,7 +2948,7 @@
     faceLossPoseMMD.clear(); faceLossPoseVRM.clear(); resetFaceLossState(true);
     faceSignal.available = false; faceSignal.present = false; faceSignal.confidence = null; faceSignal.source = 'unknown'; faceSignal.lastUpdateAt = 0; faceSignal.lastPresentAt = 0; faceSignal.lastAbsentAt = 0; faceSignal.signature = '';
     poseSignal.available = false; poseSignal.present = false; poseSignal.confidence = null; poseSignal.source = 'unknown'; poseSignal.lastUpdateAt = 0; poseSignal.lastPresentAt = 0; poseSignal.lastAbsentAt = 0; poseSignal.signature = '';
-    nativePoseEverDetected = false;
+    nativePoseEverDetected = false; nativePoseLastDetectedAt = 0;
     faceRuntimeSignature = ''; faceRuntimeChangedAt = 0; faceRuntimeEverPresent = false; faceRuntimeLastPresentAt = 0;
     technicalMeshSampleAt = 0; technicalMeshSample = { available:false, present:false, source:'none' }; technicalMeshCandidatesCache = []; technicalMeshCandidatesAt = 0;
     broadcastHands();
@@ -2951,9 +3042,11 @@
   });
 
   events.on('profile-loaded', () => {
+    broadcastTrackingState();
     setTimeout(restoreRuntime, 650);
     setTimeout(watchStartupCalibration, 750);
   });
+  events.on('collider', () => broadcastTrackingState());
   events.on('camera-started', watchStartupCalibration);
   // A VRM swap replaces the skeleton behind model index 0. Snapshots captured
   // from the previous avatar are not portable: applying those rotations during
@@ -2987,6 +3080,9 @@
     const previousIdentity = lastNativeMotionIdentity || nativeMotionIdentity(event.detail?.motion_old);
     const logicalChange = !!identity && identity !== previousIdentity;
     if (identity) lastNativeMotionIdentity = identity;
+    if (logicalChange) {
+      syncColliderModeForPose(manager);
+    }
     XRA.debug?.record('tracking.native-motion-change', {
       motion:manager?.filename || null,
       identity:identity || null,
@@ -3050,6 +3146,7 @@
     applyColliderPreset,
     setColliderField,
     bodyCollider,
+    syncColliderModeForPose,
     COLLIDER_PRESETS,
     restoreRuntime,
     suspendForPoseChange,
@@ -3080,6 +3177,7 @@
 
   // Global double-click reset for all poses (Full body, Upper body, etc.)
   window.addEventListener('dblclick', (e) => {
+    if (config.camera?.mouse_locked) return;
     // Ignore double clicks on UI controls, sidebars, or modals
     if (e.target?.closest?.('#xra-panel-container, .xra-overlay, .xra-modal, select, input, button, textarea, a')) return;
     try {

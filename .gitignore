@@ -46,5 +46,11 @@ __pycache__/
 # Vendored wheels are added deliberately by the maintainer; keep them tracked
 # only when intentionally committed. Ignore stray partially-downloaded wheels.
 /xra_backends/wheels/*.part
+
+# The stage picker stores user imports here. Only the generated built-in stage
+# is a repository asset required by the release build.
+/stages/*
+!/stages/default_stage.glb
+
 # Scratch / test artifacts
 /tmp/

@@ -210,14 +210,16 @@
       offset_x: 0,
       offset_y: 0,
       offset_z: 0,
-      rotation_y: 0
+      rotation_y: 0,
+      face_camera: false
     },
     second_avatar: {
       vrm_path: 'AliciaSolid',
       offset_x: 12.0,
       offset_y: 0,
       offset_z: 0,
-      rotation_y: -15.0
+      rotation_y: 0,
+      face_camera: false
     },
     stage: {
       path: '',
@@ -241,7 +243,9 @@
       head: 100,
       chest: 100,
       waist: 100,
-      hip: 100
+      hip: 100,
+      front_guard: false,
+      front_clearance: 8
     },
     visual_effects: {
       UnrealBloom: null,
@@ -561,6 +565,7 @@
     nativeConfig.user_camera.pixel_limit ||= {};
     nativeConfig.user_camera.ML_models ||= {};
     nativeConfig.user_camera.ML_models.pose ||= {};
+    nativeConfig.user_camera.ML_models.pose.body_collider ||= {};
     nativeConfig.user_camera.display ||= {};
     nativeConfig.user_camera.display.video ||= {};
     nativeConfig.user_camera.display.wireframe ||= {};
@@ -581,6 +586,18 @@
     nativeConfig.user_camera.fps = { ideal: Number(config.camera.fps) || 30 };
 
     nativeConfig.user_camera.ML_models.pose.model_quality = config.pose_model;
+
+    // Body-collider mode follows the selected mocap pose when collider is active.
+    const fullBodyMocap = String(config.avatar?.pose_key || '').startsWith('stand_simple::full::');
+    const colliderConfig = config.collider || {};
+    const configuredMode = Number(colliderConfig.mode ?? 0);
+    const nativeCollider = nativeConfig.user_camera.ML_models.pose.body_collider;
+    nativeCollider.mode = (configuredMode === 0) ? 0 : (fullBodyMocap && configuredMode === 2 ? 2 : 1);
+    for (const part of ['head', 'chest', 'waist', 'hip']) {
+      nativeCollider[part] ||= {};
+      nativeCollider[part].size_percent = Number(colliderConfig[part] ?? 100);
+    }
+    nativeCollider.head.reaction_type = String(colliderConfig.reaction || 'z_push');
 
     nativeConfig.user_camera.streamer_mode ||= {};
     nativeConfig.user_camera.streamer_mode.camera_preference ||= {};

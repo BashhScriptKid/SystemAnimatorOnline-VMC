@@ -950,6 +950,9 @@ var XRA_last_hands_result = null;
 // Set true on the frame the NATIVE/native-MediaPipe wholebody stream supplied
 // hands/face, so the native hand-pose blocks below don't clobber them.
 var XRA_NATIVE_wholebody = false;
+var XRA_native_pose_timestamp_ms = 0;
+var XRA_native_pose_frame_id = null;
+var XRA_native_frame_delta_ms = 0;
 var XRA_backend_last_options = null;
 // XR Animator's synthetic presentation canvas is 960x540. Backend capture
 // geometry is deliberately not used here: landmarks are normalized and must
@@ -962,6 +965,7 @@ var XRA_backend_pose_push_pending = false;
 var XRA_backend_pose_listener_installed = false;
 var XRA_backend_last_output = null;
 var XRA_backend_last_output_json = null;
+var XRA_backend_last_replay_output_json = null;
 
 var XRA_backend_diag = {
   ticks: 0,
@@ -1032,9 +1036,47 @@ function XRA_backend_empty_output(reason) {
 function XRA_backend_post_output(payload) {
   XRA_backend_last_output = payload;
   XRA_backend_last_output_json = JSON.stringify(payload);
+  // Browser scheduler ticks can outnumber fresh backend frames. Replays must
+  // preserve the last landmarks without advancing time-based hand/arm state.
+  XRA_backend_last_replay_output_json = JSON.stringify(Object.assign({}, payload, {
+    xra_reused: true,
+    _t: 0,
+    _t_hands: 0
+  }));
   XRA_backend_diag.posted++;
   XRA_backend_diag.lastPostedFrameId = payload?.posenet?._xra?.frame_id ?? null;
   postMessageAT(XRA_backend_last_output_json);
+}
+
+function XRA_native_update_frame_clock(nativePose) {
+  const nativeTimestamp = Number(nativePose?._xra?.timestamp_ms);
+  const nativeFrameId = Number(nativePose?._xra?.frame_id);
+  let delta = 0;
+
+  if (
+    Number.isFinite(nativeTimestamp) && nativeTimestamp > 0 &&
+    Number.isFinite(nativeFrameId)
+  ) {
+    if (
+      XRA_native_pose_timestamp_ms > 0 &&
+      XRA_native_pose_frame_id != null &&
+      nativeTimestamp > XRA_native_pose_timestamp_ms &&
+      nativeFrameId > XRA_native_pose_frame_id
+    ) {
+      const candidate = nativeTimestamp - XRA_native_pose_timestamp_ms;
+      // A long gap is a reconnect/stall, not transition time to catch up in
+      // one frame. Rebase here and resume timing on the next fresh packet.
+      if (candidate <= 250) delta = candidate;
+    }
+    XRA_native_pose_timestamp_ms = nativeTimestamp;
+    XRA_native_pose_frame_id = nativeFrameId;
+  }
+  else {
+    XRA_native_pose_timestamp_ms = 0;
+    XRA_native_pose_frame_id = null;
+  }
+
+  XRA_native_frame_delta_ms = delta;
 }
 
 function XRA_backend_replay_last_output(reason) {
@@ -1044,7 +1086,7 @@ function XRA_backend_replay_last_output(reason) {
     XRA_backend_post_output(XRA_backend_empty_output(reason || "waiting_backend_pose"));
     return;
   }
-  postMessageAT(XRA_backend_last_output_json);
+  postMessageAT(XRA_backend_last_replay_output_json);
 }
 
 var XRA_last_stable_pose = null;
@@ -2598,6 +2640,9 @@ hands_worker_ready = false;
   // Reset the per-frame NATIVE wholebody marker; it is re-set below if this
   // frame's pose came from the backend and carried hands/face.
   XRA_NATIVE_wholebody = false;
+  // A fresh backend packet may legitimately have no hands. Start at zero so
+  // an empty/invalid packet never reuses the previous frame's elapsed time.
+  XRA_native_frame_delta_ms = 0;
 
   if (options.timestamp != null) {
     vt = options.timestamp + vt_offset;
@@ -2674,6 +2719,7 @@ hands_worker_ready = false;
       if (nativePose && nativePose.keypoints && nativePose.keypoints.length >= 17) {
         XRA_ensure_data_filters();
         pose = nativePose;
+        XRA_native_update_frame_clock(nativePose);
         pose.score = 1.0;
         if (!pose.landmarks) pose.landmarks = pose.keypoints;
         if (!pose.keypoints3D_raw) pose.keypoints3D_raw = pose.keypoints3D;
@@ -2958,7 +3004,18 @@ else {
     hands_worker_data = null;
   }
 
-  if (hands_worker_data) {
+  if (XRA_NATIVE_active()) {
+    // Native inference happens outside this worker. Its source-frame clock is
+    // the elapsed time for arm entry/exit; local JS work time is only sub-ms.
+    hands_worker_data = null;
+    _t_hands = XRA_native_frame_delta_ms;
+    fps_hands = XRA_native_frame_delta_ms > 0
+      ? 1000 / XRA_native_frame_delta_ms
+      : 0;
+    if (!Array.isArray(hands)) hands = [];
+    hands = hands.filter((h)=>h.annotations&&Object.keys(h.annotations).length);
+  }
+  else if (hands_worker_data) {
     _t_hands = hands_worker_data._t;
     fps_hands = hands_worker_data.fps;
 

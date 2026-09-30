@@ -10,6 +10,7 @@
   let activeStageMesh = null;
   const activeProps = {}; // { [propKey]: { mesh, staticPos, staticRot, staticScale, currentHand, lastSeenTime } }
   let sceneZoomRetryTimer = 0;
+  let cameraViewRestoreGeneration = 0;
   const cameraZoomBeforeScene = new Map();
   const trackballZoomRuntime = new WeakMap();
   // THREE Euler XYZ reconstructs Y from quaternions in the stable [-90°, 90°]
@@ -274,6 +275,50 @@
     return [...new Set(cameras)];
   }
 
+  let faceCameraPositionScratch = null;
+
+  function normalizeYawRadians(value) {
+    value = Number(value) || 0;
+    while (value > Math.PI) value -= Math.PI * 2;
+    while (value < -Math.PI) value += Math.PI * 2;
+    return value;
+  }
+
+  function activeCameraWorldPosition() {
+    const camera = getRenderCameras()[0] || window.MMD_SA?._trackball_camera?.object;
+    if (camera?.position) {
+      const Vector3 = camera.position.constructor;
+      if (!faceCameraPositionScratch || faceCameraPositionScratch.constructor !== Vector3) {
+        faceCameraPositionScratch = new Vector3();
+      }
+      if (camera.getWorldPosition) camera.getWorldPosition(faceCameraPositionScratch);
+      else faceCameraPositionScratch.copy(camera.position);
+      if (Number.isFinite(faceCameraPositionScratch.x) && Number.isFinite(faceCameraPositionScratch.z)) {
+        return faceCameraPositionScratch;
+      }
+    }
+    const mmdCamPos = window.MMD_SA?.camera_position;
+    if (mmdCamPos && Number.isFinite(mmdCamPos.x) && Number.isFinite(mmdCamPos.z)) {
+      return mmdCamPos;
+    }
+    return null;
+  }
+
+  function avatarFacingYaw(x, z, settings, fallback = 0, invertHorizontal = false) {
+    const trim = clampAvatarYaw(settings?.rotation_y, fallback) * (Math.PI / 180.0);
+    const cameraPosition = activeCameraWorldPosition();
+    if (!cameraPosition) return trim;
+    const dx = Number(cameraPosition.x) - Number(x);
+    const dz = Number(cameraPosition.z) - Number(z);
+    if (!Number.isFinite(dx) || !Number.isFinite(dz) || Math.hypot(dx, dz) < 1e-6) return trim;
+    const horizontal = invertHorizontal ? -dx : dx;
+    const cameraYaw = Math.atan2(horizontal, dz);
+    // OFF keeps the avatar looking straight at the camera. ON mirrors the old
+    // fixed-yaw pose around that camera-facing direction, so an off-axis avatar
+    // turns inward towards the stage/camera instead of outward.
+    return normalizeYawRadians(cameraYaw * (settings?.face_camera ? 2 : 1) + trim);
+  }
+
   function pointDistance(a, b) {
     if (!a || !b) return NaN;
     return Math.hypot(
@@ -477,6 +522,23 @@
     if (config.stage?.enabled && config.stage?.path) config.stage.scene_zoom = preset.zoom;
     config.camera.selected_view_preset = preset.name;
     events.emit('camera-view-preset-applied', { preset });
+    return true;
+  }
+
+  function restoreSelectedCameraViewPreset({ attempts = 24, delay = 200 } = {}) {
+    const name = String(config.camera?.selected_view_preset || '').trim();
+    const generation = ++cameraViewRestoreGeneration;
+    if (!name) return false;
+
+    const attempt = (remaining) => {
+      if (generation !== cameraViewRestoreGeneration) return;
+      if (applyCameraViewPreset(name)) {
+        events.emit('camera-view-preset-restored', { name });
+        return;
+      }
+      if (remaining > 1) setTimeout(() => attempt(remaining - 1), delay);
+    };
+    attempt(Math.max(1, Number(attempts) || 1));
     return true;
   }
 
@@ -789,31 +851,51 @@
     return getAvatarBaseOrigin();
   }
 
-  function applyAvatarPosition() {
+  function getAvatarRoots() {
     const avatar = getAvatarModel();
-    const root = avatar?.mesh || avatar?.scene;
-    if (!root || !root.position) return false;
+    if (!avatar) return [];
+    // Target only the single top-level root node of the active avatar.
+    // Never include child meshes alongside parent scenes (avoids double transform/rotation),
+    // and never include the base MMD mesh when VRM is active (which shifts the Three.js camera look-at anchor).
+    const root = avatar.scene || avatar.mesh || avatar.model?.scene;
+    if (root?.position) return [root];
+    return [];
+  }
+
+  function applyAvatarPosition() {
+    const roots = getAvatarRoots();
+    if (!roots.length) return false;
 
     const baseOrigin = getAvatarBaseOrigin();
     const ox = Number(config.avatar?.offset_x ?? 0.0);
     const oy = Number(config.avatar?.offset_y ?? 0.0);
     const oz = Number(config.avatar?.offset_z ?? 0.0);
-    const rotY = clampAvatarYaw(config.avatar?.rotation_y, 0) * (Math.PI / 180.0);
     const x = baseOrigin.x + ox;
     const y = baseOrigin.y + oy;
     const z = baseOrigin.z + oz;
+    // XR Animator gives VRM 0 its 180° basis rotation on this same root, which
+    // reverses the visible horizontal response. VRM 1 and the neutral remote
+    // avatar parent use the camera-vector sign directly.
+    const invertFaceCameraYaw = getAvatarModel()?.is_VRM1 === false;
+    const rotY = avatarFacingYaw(x, z, config.avatar, 0, invertFaceCameraYaw);
     const epsilon = 1e-6;
-    const changed =
-      Math.abs(root.position.x - x) > epsilon ||
-      Math.abs(root.position.y - y) > epsilon ||
-      Math.abs(root.position.z - z) > epsilon ||
-      Math.abs(root.rotation.y - rotY) > epsilon;
 
-    if (!changed) return true;
-    root.position.set(x, y, z);
-    root.rotation.y = rotY;
-    root.updateMatrix?.();
-    root.matrixWorldNeedsUpdate = true;
+    let anyChanged = false;
+    for (const root of roots) {
+      const changed =
+        Math.abs(root.position.x - x) > epsilon ||
+        Math.abs(root.position.y - y) > epsilon ||
+        Math.abs(root.position.z - z) > epsilon ||
+        Math.abs(normalizeYawRadians(root.rotation.y - rotY)) > epsilon;
+
+      if (changed) {
+        root.position.set(x, y, z);
+        root.rotation.y = rotY;
+        root.updateMatrix?.();
+        root.matrixWorldNeedsUpdate = true;
+        anyChanged = true;
+      }
+    }
     return true;
   }
 
@@ -1278,11 +1360,11 @@
       const x = baseOrigin.x + Number(config.second_avatar?.offset_x ?? 12.0);
       const y = baseOrigin.y + Number(config.second_avatar?.offset_y ?? 0.0);
       const z = baseOrigin.z + Number(config.second_avatar?.offset_z ?? 0.0);
-      const yaw = clampAvatarYaw(config.second_avatar?.rotation_y, -15) * Math.PI / 180;
+      const yaw = avatarFacingYaw(x, z, config.second_avatar, 0);
       if (![x, y, z, yaw].every(Number.isFinite)) return false;
 
       const distance = Math.hypot(root.position.x - x, root.position.y - y, root.position.z - z);
-      const yawDelta = Math.abs(root.rotation.y - yaw);
+      const yawDelta = Math.abs(normalizeYawRadians(root.rotation.y - yaw));
       if (distance < 1e-6 && yawDelta < 1e-6) return true;
 
       root.position.set(x, y, z);
@@ -1867,6 +1949,10 @@
     setTimeout(setupTrackballCamera, 700);
     setTimeout(applySceneZoom, 800);
     setTimeout(applyAvatarPosition, 900);
+    // Native camera setup can finish after the profile is loaded. Reapply the
+    // selected saved framing only after stage zoom/trackball initialization.
+    setTimeout(() => restoreSelectedCameraViewPreset(), 1050);
+    setTimeout(() => restoreSelectedCameraViewPreset({ attempts: 8 }), 2400);
     setTimeout(async () => {
       await initDefaultProps();
       if (config.object_tracking?.enabled) {
@@ -1879,10 +1965,39 @@
     setTimeout(applyStage, 500);
     setTimeout(applyAvatarPosition, 550);
   });
+  let savedCameraDistance = 0;
+  let savedCameraZoom = 1;
   window.addEventListener('jThree_ready', () => setTimeout(setupTrackballCamera, 0));
-  window.addEventListener('MMDCameraReset', () => setTimeout(setupTrackballCamera, 0));
+  window.addEventListener('MMDCameraReset', () => {
+    try {
+      const trackball = window.MMD_SA?._trackball_camera;
+      const cam = trackball?.object || getRenderCameras()[0];
+      if (cam && trackball?.target) {
+        savedCameraDistance = cam.position.distanceTo(trackball.target);
+        savedCameraZoom = cam.zoom || 1;
+      }
+    } catch (_) {}
+    setTimeout(setupTrackballCamera, 0);
+  });
   window.addEventListener('MMDCameraReset_after', () => setTimeout(() => {
     setupTrackballCamera();
+    try {
+      if (savedCameraDistance > 0) {
+        const trackball = window.MMD_SA?._trackball_camera;
+        const cam = trackball?.object || getRenderCameras()[0];
+        if (cam && trackball?.target) {
+          const eye = cam.position.clone().sub(trackball.target);
+          if (eye.length() > 1e-4) {
+            eye.setLength(savedCameraDistance);
+            cam.position.copy(trackball.target).add(eye);
+            if (trackball._eye) trackball._eye.copy(eye);
+            if (trackball.lastPosition) trackball.lastPosition.copy(cam.position);
+          }
+          if (savedCameraZoom) cam.zoom = savedCameraZoom;
+          cam.updateProjectionMatrix?.();
+        }
+      }
+    } catch (_) {}
     applySceneZoom();
   }, 0));
   window.addEventListener('SA_camera_poseNet_process_bones_onended', applyAvatarPosition);
@@ -1905,6 +2020,7 @@
     applyAvatarPosition();
     applySecondAvatarPosition();
     setupTrackballCamera();
+    restoreSelectedCameraViewPreset();
     if (config.object_tracking?.enabled) {
       initDefaultProps().then(() => {
         applyManualAttaches();
@@ -1935,6 +2051,7 @@
     listCameraViewPresets,
     saveCameraViewPreset,
     applyCameraViewPreset,
+    restoreSelectedCameraViewPreset,
     deleteCameraViewPreset,
     updateGripTransforms,
     resetAllProps,

@@ -2032,10 +2032,49 @@ class CaptureSource:
         if root_px is None:
             return None
 
+        def wrist_distance(wrist):
+            if wrist is None:
+                return float("inf")
+            return (
+                (root_px[0] - wrist[0]) ** 2
+                + (root_px[1] - wrist[1]) ** 2
+            ) ** 0.5
+
+        source_distance = wrist_distance(source_wrist)
+        target_distance = wrist_distance(target_wrist)
+        association_limit = max(float(torso or 0.0) * 0.65, 80.0)
+        association_margin = max(float(torso or 0.0) * 0.12, 18.0)
+        source_matches_body = bool(
+            source_score >= 0.35 and source_distance <= association_limit
+        )
+        target_matches_body = bool(
+            target_score >= 0.35 and target_distance <= association_limit
+        )
+
+        # A clear current-frame wrist association is stronger evidence than a
+        # short-lived label track.  Consult continuity only when BlazePose is
+        # missing or the two wrists are genuinely ambiguous.
+        if source_matches_body and (
+            not target_matches_body
+            or source_distance + association_margin < target_distance
+        ):
+            return None
+        if target_matches_body and (
+            not source_matches_body
+            or target_distance + association_margin < source_distance
+        ):
+            source_world = self._hand_world_key(source)
+            target_world = self._hand_world_key(target)
+            payload[target] = payload[source]
+            payload[source] = []
+            payload[target_world] = payload.get(source_world, [])
+            payload[source_world] = []
+            return source
+
         # Handedness is especially unstable while one hand crosses the body.
-        # Preserve the identity of a recent spatially-continuous track before
-        # consulting the noisier body wrist labels.  This prevents alternating
-        # Left/Right labels from creating a held second hand on every frame.
+        # Preserve the identity of a recent spatially-continuous track when
+        # the body wrists cannot decide.  This prevents alternating Left/Right
+        # labels from creating a held second hand on every frame.
         source_previous = self._hand_last_good.get(source)
         target_previous = self._hand_last_good.get(target)
         source_age = now - self._hand_last_good_at.get(source, 0.0)
@@ -2056,12 +2095,12 @@ class CaptureSource:
 
         source_previous_distance = previous_distance(source_previous)
         target_previous_distance = previous_distance(target_previous)
-        continuity_limit = max(float(torso or 0.0) * 0.75, 90.0)
+        continuity_limit = max(float(torso or 0.0) * 0.75, 50.0)
         if (
-            target_age <= 0.35
+            target_age <= 0.15
             and target_previous_distance <= continuity_limit
             and (
-                source_age > 0.35
+                source_age > 0.15
                 or target_previous_distance + max(float(torso or 0.0) * 0.12, 18.0)
                 < source_previous_distance
             )
@@ -2074,37 +2113,7 @@ class CaptureSource:
             payload[source_world] = []
             return source
 
-        if target_wrist is None or target_score < 0.35:
-            return None
-
-        target_distance = (
-            (root_px[0] - target_wrist[0]) ** 2
-            + (root_px[1] - target_wrist[1]) ** 2
-        ) ** 0.5
-        association_limit = max(float(torso or 0.0) * 0.65, 80.0)
-        if target_distance > association_limit:
-            return None
-
-        source_distance = float("inf")
-        if source_wrist is not None:
-            source_distance = (
-                (root_px[0] - source_wrist[0]) ** 2
-                + (root_px[1] - source_wrist[1]) ** 2
-            ) ** 0.5
-        clearly_opposite = bool(
-            source_score < 0.20
-            or source_distance >= target_distance + max(float(torso or 0.0) * 0.35, 35.0)
-        )
-        if not clearly_opposite:
-            return None
-
-        source_world = self._hand_world_key(source)
-        target_world = self._hand_world_key(target)
-        payload[target] = payload[source]
-        payload[source] = []
-        payload[target_world] = payload.get(source_world, [])
-        payload[source_world] = []
-        return source
+        return None
 
     def _confirm_new_hand_candidate(
         self,
@@ -2120,9 +2129,9 @@ class CaptureSource:
 
         MediaPipe hand landmark confidence is always 1.0 in this pipeline, so
         it cannot distinguish a real hand from a one-frame face/chest false
-        positive.  Existing tracks and candidates corroborated by a body elbow
-        or wrist remain immediate; only a brand-new, uncorroborated candidate
-        must persist spatially for a short interval.
+        positive.  Existing tracks and candidates spatially corroborated by a
+        body wrist or a strong nearby elbow remain immediate; only a brand-new,
+        uncorroborated candidate must persist spatially for a short interval.
         """
         if not (isinstance(hand, list) and len(hand) >= 21):
             self._hand_candidate_since[hand_key] = 0.0
@@ -2140,25 +2149,46 @@ class CaptureSource:
         is_left = hand_key == "leftHand"
         elbow_index = 13 if is_left else 14
         wrist_index = 15 if is_left else 16
-        arm_corroborated = bool(
-            isinstance(body, list)
-            and len(body) == 33
-            and (
-                self._point_score(body[elbow_index]) >= 0.25
-                or self._point_score(body[wrist_index]) >= 0.25
-            )
-        )
-        if arm_corroborated:
-            self._hand_candidate_since[hand_key] = 0.0
-            self._hand_candidate_frames[hand_key] = 0
-            self._hand_candidate_root[hand_key] = None
-            return True
-
         root = self._point_xy(hand[0])
         if root is None:
             return False
         if width and height and abs(root[0]) <= 1.5 and abs(root[1]) <= 1.5:
             root = root[0] * width, root[1] * height
+
+        wrist_corroborated = False
+        elbow_corroborated = False
+        if isinstance(body, list) and len(body) == 33:
+            def body_distance(index):
+                point = self._point_xy(body[index])
+                if point is None:
+                    return float("inf")
+                if width and height and abs(point[0]) <= 1.5 and abs(point[1]) <= 1.5:
+                    point = point[0] * width, point[1] * height
+                return (
+                    (root[0] - point[0]) ** 2
+                    + (root[1] - point[1]) ** 2
+                ) ** 0.5
+
+            wrist_corroborated = bool(
+                self._point_score(body[wrist_index]) >= 0.25
+                and body_distance(wrist_index)
+                <= max(float(torso or 0.0) * 0.45, 60.0)
+            )
+            elbow_corroborated = bool(
+                self._point_score(body[elbow_index]) >= 0.55
+                and body_distance(elbow_index)
+                <= max(
+                    float(torso or 0.0) * 0.90,
+                    height * 0.45 if height else 90.0,
+                    90.0,
+                )
+            )
+        if wrist_corroborated or elbow_corroborated:
+            self._hand_candidate_since[hand_key] = 0.0
+            self._hand_candidate_frames[hand_key] = 0
+            self._hand_candidate_root[hand_key] = None
+            return True
+
         previous_root = self._hand_candidate_root.get(hand_key)
         continuity_limit = max(float(torso or 0.0) * 0.35, 45.0)
         continuous = bool(
@@ -2598,7 +2628,7 @@ class CaptureSource:
             if el_px and el_sc >= 0.25:
                 dist_el = ((hw_px[0] - el_px[0]) ** 2 + (hw_px[1] - el_px[1]) ** 2) ** 0.5
                 len_se = ((el_px[0] - sh_px[0]) ** 2 + (el_px[1] - sh_px[1]) ** 2) ** 0.5 if (sh_px and sh_sc >= 0.20) else (torso * 0.70)
-                max_forearm = max(len_se * 1.35, torso * 1.05, height * 0.32 if height else 180.0)
+                max_forearm = max(len_se * 1.65, torso * 1.35, height * 0.40 if height else 220.0)
                 if dist_el > max_forearm:
                     is_desk_stuck_elbow = bool(
                         sh_px and sh_sc >= 0.20
@@ -2903,7 +2933,7 @@ class CaptureSource:
                                 need_synth_elbow = True
                             elif sh_xy is not None:
                                 dist_se = ((el_xy[0] - sh_xy[0]) ** 2 + (el_xy[1] - sh_xy[1]) ** 2) ** 0.5
-                                max_arm_span = max(torso * 2.2, height * 0.45)
+                                max_arm_span = max(torso * 2.8, height * 0.55)
                                 if dist_se > max_arm_span:
                                     need_synth_elbow = True
 
@@ -2918,10 +2948,10 @@ class CaptureSource:
                             if xy[1] <= sh_xy[1] + torso * 0.40:
                                 mx = (sh_xy[0] + xy[0]) * 0.5
                                 my = (sh_xy[1] + xy[1]) * 0.5
-                                synth_ex = mx + side_sign * max(22.0, torso * 0.22)
+                                synth_ex = mx + side_sign * max(35.0, torso * 0.40)
                                 synth_ey = max(sh_xy[1] + torso * 0.18, my + torso * 0.12)
                             else:
-                                synth_ex = sh_xy[0] + side_sign * max(20.0, torso * 0.20)
+                                synth_ex = sh_xy[0] + side_sign * max(30.0, torso * 0.35)
                                 synth_ey = sh_xy[1] + max(40.0, torso * 0.70)
                             el_part = "leftElbow" if pidx == 13 else "rightElbow"
                             body[pidx] = {
@@ -3687,7 +3717,7 @@ class CaptureSource:
                         and previous_hand is not None
                         and was_live
                         and not self._hand_moving_down.get(key, False)
-                        and age <= 0.18
+                        and age <= 0.95
                     ):
                         payload[key] = [copy_fn(p) for p in previous_hand]
                         held_world = self._hand_world_last_good.get(key)

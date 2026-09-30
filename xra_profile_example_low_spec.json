@@ -74,7 +74,9 @@
       "head": 100,
       "chest": 100,
       "waist": 100,
-      "hip": 100
+      "hip": 100,
+      "front_guard": false,
+      "front_clearance": 8
     },
     "visual_effects": {
       "UnrealBloom": null,
@@ -83,7 +85,20 @@
     },
     "left_settings": {},
     "avatar": {
-      "filename": ""
+      "filename": "",
+      "offset_x": 0,
+      "offset_y": 0,
+      "offset_z": 0,
+      "rotation_y": 0,
+      "face_camera": false
+    },
+    "second_avatar": {
+      "vrm_path": "AliciaSolid",
+      "offset_x": 12,
+      "offset_y": 0,
+      "offset_z": 0,
+      "rotation_y": 0,
+      "face_camera": false
     },
     "devices": {
       "mic_device_id": "",

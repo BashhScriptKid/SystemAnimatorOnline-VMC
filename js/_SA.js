@@ -2673,8 +2673,8 @@ function _SA_on_raf_frame(timestamp) {
     : (window.XRA_render_fps_limit === 0 ? 120 : 60)
   var target_interval = 1000 / target_fps
 
-  // If window is unfocused or RAF callback arrived late (compositor throttling out-of-view window to 1 Hz), switch to timer ticker
-  if (!_SA_is_foreground_active() || (_SA_last_anim_time && (now - _SA_last_anim_time) > (target_interval * 1.8))) {
+  // If window is unfocused or occluded in background, switch to timer ticker
+  if (!_SA_is_foreground_active()) {
     _SA_raf_stalled = true
     _SA_cancel_pending_raf()
     _SA_schedule_render()
@@ -2822,11 +2822,11 @@ function _SA_on_heartbeat_tick() {
   var target_interval = 1000 / target_fps
 
   var is_fg = _SA_is_foreground_active()
-  // When in foreground with active RAF, threshold is at least 1.5x target interval (giving RAF full priority).
-  // When unfocused, hidden, or RAF has stalled, threshold is 0.85x target interval to maintain steady FPS.
+  // When in foreground with active RAF, give vsync full priority and only intervene if RAF freezes completely (500ms).
+  // When unfocused, hidden, or out of view, threshold is 0.85x target interval to maintain steady FPS.
   var stall_threshold = (!is_fg || _SA_raf_stalled)
     ? (target_interval * 0.85)
-    : Math.max(22, target_interval * 1.5)
+    : 500
   var elapsed = now - _SA_last_anim_time
 
   if (elapsed >= stall_threshold) {

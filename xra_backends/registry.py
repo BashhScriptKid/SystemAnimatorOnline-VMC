@@ -47,6 +47,10 @@ _MEDIAPIPE_HAND_URL = (
     "https://storage.googleapis.com/mediapipe-models/hand_landmarker/"
     "hand_landmarker/float16/1/hand_landmarker.task"
 )
+_MEDIAPIPE_OBJECT_DETECTOR_URL = (
+    "https://storage.googleapis.com/mediapipe-models/object_detector/"
+    "efficientdet_lite0/float32/1/efficientdet_lite0.tflite"
+)
 REGISTRY: dict[str, dict] = {
     MEDIAPIPE_TASKS_ID: {
         "id": MEDIAPIPE_TASKS_ID,
@@ -76,6 +80,10 @@ REGISTRY: dict[str, dict] = {
             {"filename": "hand_landmarker.task",
              "url": _MEDIAPIPE_HAND_URL,
              "size_hint_mb": 8, "sha256": None},
+            {"filename": "efficientdet_lite0.tflite",
+             "url": _MEDIAPIPE_OBJECT_DETECTOR_URL,
+             "size_hint_mb": 14,
+             "sha256": "40338edf5ec70d43e318b0a716a84d4564cd1802759a7a07170c7e43796dbf58"},
         ],
     },
 }

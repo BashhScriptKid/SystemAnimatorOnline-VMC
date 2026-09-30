@@ -89,9 +89,10 @@
     refreshAll();
   }
 
-  function sessionReset(get, set) {
-    let captured = false;
-    let baseline;
+  function sessionReset(get, set, fixedValue) {
+    const hasFixedValue = arguments.length >= 3;
+    let captured = hasFixedValue;
+    let baseline = hasFixedValue ? clone(fixedValue) : undefined;
     const ensure = () => {
       if (!captured) {
         baseline = clone(get());
@@ -106,7 +107,9 @@
         try { return XRA.util.same(get(), ensure()); }
         catch (e) { return false; }
       },
-      title: 'Ripristina il valore presente all’apertura di XR Settings'
+      title: hasFixedValue
+        ? 'Ripristina il valore predefinito'
+        : 'Ripristina il valore presente all’apertura di XR Settings'
     };
   }
 
@@ -146,7 +149,9 @@
     return r;
   }
 
-  function addRange(parent, label, get, set, { min = 0, max = 100, step = 1, suffix = '%', sub = '' } = {}) {
+  function addRange(parent, label, get, set, {
+    min = 0, max = 100, step = 1, suffix = '%', sub = '', resetValue = undefined
+  } = {}) {
     const wrap = el('div', 'xra-stack-control');
     const input = document.createElement('input');
     input.type = 'range'; input.min = String(min); input.max = String(max); input.step = String(step);
@@ -164,7 +169,9 @@
     };
     const persist = registerPersistentLeftControl(parent, label, get, set);
     input.onchange = async () => { persist(); await saveNative(); };
-    const resetInfo = sessionReset(get, set);
+    const resetInfo = resetValue === undefined
+      ? sessionReset(get, set)
+      : sessionReset(get, set, resetValue);
     const originalReset = resetInfo.reset; resetInfo.reset = async () => { await originalReset(); persist(); };
     const r = row(parent, label, wrap, { reset: resetInfo.reset, isDefault: resetInfo.isDefault, sub });
     r.querySelector('.xra-reset')?.setAttribute('title', resetInfo.title);
@@ -872,7 +879,7 @@
     addRange(box.body, 'Arm horizontal offset',
       () => Number(pose()?.arm_horizontal_offset_percent || 0),
       value => { const p = pose(); if (p) p.arm_horizontal_offset_percent = value; },
-      { min: -200, max: 200, step: 1 });
+      { min: -200, max: 200, step: 1, resetValue: 100 });
 
     addRange(box.body, 'Arm vertical offset',
       () => Number(pose()?.arm_vertical_offset_percent || 0),

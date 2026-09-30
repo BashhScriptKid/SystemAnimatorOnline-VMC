@@ -127,13 +127,20 @@ DEFAULT_CUSTOM = {
         "guard_release_ms": 450, "freeze_head_on_face_loss": False, "freeze_recovery_ms": 350
     },
     "background": {"mode": "color", "color": "#202020", "path": "backgrounds/default.png"},
-    "collider": {"preset": "CUSTOM", "mode": 0, "reaction": "z_push", "head": 100, "chest": 100, "waist": 100, "hip": 100},
+    "collider": {
+        "preset": "CUSTOM", "mode": 0, "reaction": "z_push",
+        "head": 100, "chest": 100, "waist": 100, "hip": 100,
+        "front_guard": False, "front_clearance": 8,
+    },
     "visual_effects": {"UnrealBloom": None, "N8AO": None, "DOF": None},
     "left_settings": {},
-    "avatar": {"filename": "", "pose_key": ""},
+    "avatar": {
+        "filename": "", "pose_key": "", "offset_x": 0.0, "offset_y": 0.0,
+        "offset_z": 0.0, "rotation_y": 0.0, "face_camera": False,
+    },
     "second_avatar": {
         "vrm_path": "AliciaSolid", "offset_x": 12.0, "offset_y": 0.0,
-        "offset_z": 0.0, "rotation_y": -15.0,
+        "offset_z": 0.0, "rotation_y": 0.0, "face_camera": False,
     },
     "devices": {
         "mic_device_id": "", "camera_device_id": "", "camera_label": "",

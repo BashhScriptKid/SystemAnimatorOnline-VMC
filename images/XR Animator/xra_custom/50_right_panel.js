@@ -349,6 +349,7 @@
     window.addEventListener('touchstart', blockEvent, true);
     window.addEventListener('touchmove', blockEvent, true);
     window.addEventListener('contextmenu', blockEvent, true);
+    window.addEventListener('dblclick', blockEvent, true);
 
     bindRefresh(() => {
       const locked = !!config.camera?.mouse_locked;
@@ -1626,11 +1627,25 @@
     const colliderAdvanced = details(box.body, 'Advanced');
 
     const mode = select([[0, 'Off'], [1, 'Upper body'], [2, 'Full']]);
-    bindRefresh(() => { mode.value = String(nativeCollider()?.mode ?? 0); });
-    mode.onchange = () => XRA.tracking.setColliderField('root', 'mode', Number(mode.value));
+    bindRefresh(() => { mode.value = String(nativeCollider()?.mode ?? config.collider?.mode ?? 0); });
+    mode.onchange = () => {
+      const val = Number(mode.value);
+      config.collider ||= {};
+      config.collider.mode = val;
+      XRA.tracking.setColliderField('root', 'mode', val);
+      XRA.tracking.syncColliderModeForPose?.();
+      refreshAll();
+    };
     row(colliderAdvanced.body, 'Mode', mode, {
-      reset: async () => XRA.tracking.setColliderField('root', 'mode', 0),
-      isDefault: () => Number(nativeCollider()?.mode ?? 0) === 0
+      reset: async () => {
+        config.collider ||= {};
+        config.collider.mode = 0;
+        XRA.tracking.setColliderField('root', 'mode', 0);
+        XRA.tracking.syncColliderModeForPose?.();
+        refreshAll();
+      },
+      isDefault: () => Number(nativeCollider()?.mode ?? config.collider?.mode ?? 0) === 0,
+      sub: 'Con pose non-Full Body (es. busto o scrivania), la modalità Full viene limitata automaticamente a Upper body.'
     });
 
     const reaction = select([['z_push', 'Z push'], ['sphere', 'Sphere']]);
@@ -1639,6 +1654,56 @@
     row(colliderAdvanced.body, 'Head reaction', reaction, {
       reset: async () => XRA.tracking.setColliderField('head', 'reaction_type', 'z_push'),
       isDefault: () => (nativeCollider()?.head?.reaction_type || 'z_push') === 'z_push'
+    });
+
+    const frontGuard = document.createElement('input');
+    frontGuard.type = 'checkbox';
+    bindRefresh(() => { frontGuard.checked = !!config.collider?.front_guard; });
+    frontGuard.onchange = async () => {
+      config.collider ||= {};
+      config.collider.front_guard = frontGuard.checked;
+      events.emit('collider', 'CUSTOM');
+      await XRA.profileService.save();
+      refreshAll();
+    };
+    row(colliderAdvanced.body, 'Keep arms in front', frontGuard, {
+      reset: async () => {
+        config.collider ||= {};
+        config.collider.front_guard = false;
+      },
+      isDefault: () => !config.collider?.front_guard,
+      sub: 'Constrains wrists and elbows to the camera-facing coronal plane and prevents head penetration using smooth 3D spatial constraints.'
+    });
+
+    const frontClearanceWrap = el('div', 'xra-stack-control');
+    const frontClearance = document.createElement('input');
+    frontClearance.type = 'range';
+    frontClearance.min = '0';
+    frontClearance.max = '40';
+    frontClearance.step = '1';
+    const frontClearanceValue = el('div', 'xra-sub');
+    frontClearanceWrap.append(frontClearance, frontClearanceValue);
+    bindRefresh(() => {
+      const value = Number(config.collider?.front_clearance ?? 8);
+      frontClearance.value = String(value);
+      frontClearanceValue.textContent = `${value}%`;
+      frontClearance.disabled = !config.collider?.front_guard;
+    });
+    frontClearance.oninput = () => {
+      const value = Math.max(0, Math.min(40, Number(frontClearance.value) || 0));
+      config.collider ||= {};
+      config.collider.front_clearance = value;
+      config.collider.preset = 'CUSTOM';
+      frontClearanceValue.textContent = `${value}%`;
+    };
+    frontClearance.onchange = () => XRA.profileService.save();
+    row(colliderAdvanced.body, 'Front clearance', frontClearanceWrap, {
+      reset: async () => {
+        config.collider ||= {};
+        config.collider.front_clearance = 8;
+      },
+      isDefault: () => Number(config.collider?.front_clearance ?? 8) === 8,
+      sub: 'Minimum depth in front of the torso plane, expressed as a percentage of shoulder width.'
     });
 
     for (const [part, label] of [['head', 'Head'], ['chest', 'Chest'], ['waist', 'Waist'], ['hip', 'Hip']]) {
@@ -1658,14 +1723,20 @@
         input.value = String(value);
         text.textContent = `${value}%`;
         const collider = nativeCollider();
-        if (collider?.[part]) collider[part].size_percent = value;
+        if (collider?.[part]) {
+          collider[part].size_percent = value;
+        }
+        config.collider[part] = value;
         config.collider.preset = 'CUSTOM';
       };
       input.onchange = () => XRA.profileService.save();
       row(colliderAdvanced.body, label, wrap, {
         reset: async () => {
           const collider = nativeCollider();
-          if (collider?.[part]) collider[part].size_percent = 100;
+          if (collider?.[part]) {
+            collider[part].size_percent = 100;
+          }
+          config.collider[part] = 100;
           config.collider.preset = 'CUSTOM';
         },
         isDefault: () => Number(nativeCollider()?.[part]?.size_percent ?? 100) === 100
@@ -3082,7 +3153,27 @@
     makeAvatarRow(secAvatarPos.body, 'Avatar X', 'offset_x', -50.0, 50.0, 0.1, 0.0, 'Moves only the avatar left or right; stage and camera stay fixed.');
     makeAvatarRow(secAvatarPos.body, 'Avatar Y', 'offset_y', -20.0, 20.0, 0.1, 0.0, 'Moves only the avatar up or down; stage and camera stay fixed.');
     makeAvatarRow(secAvatarPos.body, 'Avatar Z', 'offset_z', -50.0, 50.0, 0.1, 0.0, 'Moves only the avatar in depth; stage and camera stay fixed.');
-    makeAvatarRow(secAvatarPos.body, 'Avatar rotation Y', 'rotation_y', -90, 90, 1, 0, 'Rotates the avatar in place within the rig stable range (±90°).');
+
+    const faceCamera = document.createElement('input');
+    faceCamera.type = 'checkbox';
+    bindRefresh(() => { faceCamera.checked = !!config.avatar?.face_camera; });
+    faceCamera.onchange = async () => {
+      config.avatar ||= {};
+      config.avatar.face_camera = faceCamera.checked;
+      XRA.stage?.applyAvatarPosition?.();
+      await XRA.profileService.save();
+    };
+    row(secAvatarPos.body, 'Face camera', faceCamera, {
+      reset: async () => {
+        config.avatar ||= {};
+        config.avatar.face_camera = false;
+        XRA.stage?.applyAvatarPosition?.();
+      },
+      isDefault: () => !config.avatar?.face_camera,
+      sub: 'Automatically faces the active camera. Rotation Y remains available as a fine trim.'
+    });
+
+    makeAvatarRow(secAvatarPos.body, 'Avatar rotation Y (trim)', 'rotation_y', -90, 90, 1, 0, 'Fine yaw adjustment added after Face camera alignment.');
 
     const resetAvatarPosBtn = button('↺ Reset avatar position');
     resetAvatarPosBtn.onclick = async () => {
@@ -3345,7 +3436,27 @@
     makeSecondAvatarRow(secAvatar2Pos.body, 'Remote Avatar X', 'offset_x', -50, 50, 0.1, 12, 'Horizontal position, independent of stage and camera.');
     makeSecondAvatarRow(secAvatar2Pos.body, 'Remote Avatar Y', 'offset_y', -20, 20, 0.1, 0, 'Height of the remote avatar.');
     makeSecondAvatarRow(secAvatar2Pos.body, 'Remote Avatar Z', 'offset_z', -50, 50, 0.1, 0, 'Depth of the remote avatar.');
-    makeSecondAvatarRow(secAvatar2Pos.body, 'Rotation Y (Yaw)', 'rotation_y', -90, 90, 1, -15, 'Remote avatar rotation within the rig stable range (±90°).');
+
+    const secondAvatarFaceCamera = document.createElement('input');
+    secondAvatarFaceCamera.type = 'checkbox';
+    bindRefresh(() => { secondAvatarFaceCamera.checked = !!config.second_avatar?.face_camera; });
+    secondAvatarFaceCamera.onchange = async () => {
+      config.second_avatar ||= {};
+      config.second_avatar.face_camera = secondAvatarFaceCamera.checked;
+      XRA.stage?.applySecondAvatarPosition?.();
+      await XRA.profileService.save();
+    };
+    row(secAvatar2Pos.body, 'Face camera', secondAvatarFaceCamera, {
+      reset: async () => {
+        config.second_avatar ||= {};
+        config.second_avatar.face_camera = false;
+        XRA.stage?.applySecondAvatarPosition?.();
+      },
+      isDefault: () => !config.second_avatar?.face_camera,
+      sub: 'Automatically faces the remote avatar toward the active camera. Rotation Y remains a fine trim.'
+    });
+
+    makeSecondAvatarRow(secAvatar2Pos.body, 'Rotation Y (trim)', 'rotation_y', -90, 90, 1, 0, 'Fine yaw adjustment added after Face camera alignment.');
 
     const resetSecondAvatarPosBtn = button('↺ Reset remote avatar position');
     resetSecondAvatarPosBtn.onclick = async () => {
@@ -3354,7 +3465,7 @@
         offset_x: 12,
         offset_y: 0,
         offset_z: 0,
-        rotation_y: -15
+        rotation_y: 0
       });
       XRA.stage?.applySecondAvatarPosition?.();
       await XRA.profileService.save();
@@ -3518,6 +3629,7 @@
       updateIndicator();
     }
   }
+
 
   function create() {
     if (panel) return panel;
