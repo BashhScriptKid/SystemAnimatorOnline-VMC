@@ -817,6 +817,7 @@ class CaptureSource:
         self._body_last_good_at = [0.0] * 33
         self._hand_last_good = {"leftHand": None, "rightHand": None}
         self._hand_last_good_at = {"leftHand": 0.0, "rightHand": 0.0}
+        self._hand_last_trusted_root = {"leftHand": None, "rightHand": None}
         self._hand_world_last_good = {"leftHand": None, "rightHand": None}
         self._hand_was_live = {"leftHand": False, "rightHand": False}
         self._hand_fist_state = {"leftHand": False, "rightHand": False}
@@ -826,6 +827,12 @@ class CaptureSource:
         self._hand_candidate_since = {"leftHand": 0.0, "rightHand": 0.0}
         self._hand_candidate_frames = {"leftHand": 0, "rightHand": 0}
         self._hand_candidate_root = {"leftHand": None, "rightHand": None}
+        self._hand_candidate_origin = {"leftHand": None, "rightHand": None}
+        self._hand_candidate_travel = {"leftHand": 0.0, "rightHand": 0.0}
+        self._hand_candidate_motion_frames = {"leftHand": 0, "rightHand": 0}
+        self._hand_candidate_face_bound = {"leftHand": False, "rightHand": False}
+        self._hand_candidate_face_box = {"leftHand": None, "rightHand": None}
+        self._hand_candidate_off_face_frames = {"leftHand": 0, "rightHand": 0}
         self._hand_recovery_active = {"leftHand": False, "rightHand": False}
         self._hands_contact_active = False
         self._hands_contact_last_close_at = 0.0
@@ -1749,6 +1756,7 @@ class CaptureSource:
         self._hand_wrist_rel = {17: None, 18: None, 19: None, 20: None, 21: None, 22: None}
         self._hand_last_good = {"leftHand": None, "rightHand": None}
         self._hand_last_good_at = {"leftHand": 0.0, "rightHand": 0.0}
+        self._hand_last_trusted_root = {"leftHand": None, "rightHand": None}
         self._hand_world_last_good = {"leftHand": None, "rightHand": None}
         self._hand_was_live = {"leftHand": False, "rightHand": False}
         self._hand_fist_state = {"leftHand": False, "rightHand": False}
@@ -1758,6 +1766,12 @@ class CaptureSource:
         self._hand_candidate_since = {"leftHand": 0.0, "rightHand": 0.0}
         self._hand_candidate_frames = {"leftHand": 0, "rightHand": 0}
         self._hand_candidate_root = {"leftHand": None, "rightHand": None}
+        self._hand_candidate_origin = {"leftHand": None, "rightHand": None}
+        self._hand_candidate_travel = {"leftHand": 0.0, "rightHand": 0.0}
+        self._hand_candidate_motion_frames = {"leftHand": 0, "rightHand": 0}
+        self._hand_candidate_face_bound = {"leftHand": False, "rightHand": False}
+        self._hand_candidate_face_box = {"leftHand": None, "rightHand": None}
+        self._hand_candidate_off_face_frames = {"leftHand": 0, "rightHand": 0}
         self._hand_recovery_active = {"leftHand": False, "rightHand": False}
         self._python_hand_recovery_body_conflict = {
             "leftHand": 0,
@@ -2115,11 +2129,23 @@ class CaptureSource:
 
         return None
 
+    def _clear_hand_candidate(self, hand_key: str) -> None:
+        self._hand_candidate_since[hand_key] = 0.0
+        self._hand_candidate_frames[hand_key] = 0
+        self._hand_candidate_root[hand_key] = None
+        self._hand_candidate_origin[hand_key] = None
+        self._hand_candidate_travel[hand_key] = 0.0
+        self._hand_candidate_motion_frames[hand_key] = 0
+        self._hand_candidate_face_bound[hand_key] = False
+        self._hand_candidate_face_box[hand_key] = None
+        self._hand_candidate_off_face_frames[hand_key] = 0
+
     def _confirm_new_hand_candidate(
         self,
         hand_key: str,
         hand: Any,
         body: Optional[list],
+        face: Any,
         width: int,
         height: int,
         torso: float,
@@ -2128,22 +2154,19 @@ class CaptureSource:
         """Reject isolated hand births when the body arm has no evidence.
 
         MediaPipe hand landmark confidence is always 1.0 in this pipeline, so
-        it cannot distinguish a real hand from a one-frame face/chest false
-        positive.  Existing tracks and candidates spatially corroborated by a
-        body wrist or a strong nearby elbow remain immediate; only a brand-new,
-        uncorroborated candidate must persist spatially for a short interval.
+        it cannot distinguish a real hand from a face/body false positive.
+        Existing tracks and candidates spatially corroborated by a body wrist
+        or a strong nearby elbow remain immediate.  A brand-new candidate with
+        no arm evidence must also show real displacement: persistence alone is
+        not evidence because false detections can remain stable for seconds.
         """
         if not (isinstance(hand, list) and len(hand) >= 21):
-            self._hand_candidate_since[hand_key] = 0.0
-            self._hand_candidate_frames[hand_key] = 0
-            self._hand_candidate_root[hand_key] = None
+            self._clear_hand_candidate(hand_key)
             return False
 
         last_live_age = now - self._hand_last_good_at.get(hand_key, 0.0)
-        if self._hand_was_live.get(hand_key, False) or last_live_age <= 0.80:
-            self._hand_candidate_since[hand_key] = 0.0
-            self._hand_candidate_frames[hand_key] = 0
-            self._hand_candidate_root[hand_key] = None
+        if self._hand_was_live.get(hand_key, False):
+            self._clear_hand_candidate(hand_key)
             return True
 
         is_left = hand_key == "leftHand"
@@ -2151,9 +2174,32 @@ class CaptureSource:
         wrist_index = 15 if is_left else 16
         root = self._point_xy(hand[0])
         if root is None:
+            self._clear_hand_candidate(hand_key)
             return False
         if width and height and abs(root[0]) <= 1.5 and abs(root[1]) <= 1.5:
             root = root[0] * width, root[1] * height
+
+        # A returning fist or edge-on palm can briefly disappear from the hand
+        # detector.  Re-admit it only near a genuinely accepted sample; an old
+        # timestamp by itself must not give an unrelated phantom a free pass.
+        trusted_root = self._hand_last_trusted_root.get(hand_key)
+        trusted_distance = float("inf")
+        if trusted_root is not None:
+            trusted_distance = (
+                (root[0] - trusted_root[0]) ** 2
+                + (root[1] - trusted_root[1]) ** 2
+            ) ** 0.5
+        reacquisition_limit = max(
+            45.0,
+            min(90.0, float(torso or 0.0) * 0.22),
+        )
+        recent_reacquisition = bool(
+            last_live_age <= 1.05
+            and trusted_distance <= reacquisition_limit
+        )
+        if recent_reacquisition:
+            self._clear_hand_candidate(hand_key)
+            return True
 
         wrist_corroborated = False
         elbow_corroborated = False
@@ -2184,10 +2230,47 @@ class CaptureSource:
                 )
             )
         if wrist_corroborated or elbow_corroborated:
-            self._hand_candidate_since[hand_key] = 0.0
-            self._hand_candidate_frames[hand_key] = 0
-            self._hand_candidate_root[hand_key] = None
+            self._clear_hand_candidate(hand_key)
             return True
+
+        face_landmarks = face.get("landmarks") if isinstance(face, dict) else None
+        face_points = []
+        if isinstance(face_landmarks, list):
+            for point in face_landmarks:
+                xy = self._point_xy(point)
+                if xy is None:
+                    continue
+                if width and height and abs(xy[0]) <= 1.5 and abs(xy[1]) <= 1.5:
+                    xy = xy[0] * width, xy[1] * height
+                face_points.append(xy)
+        face_box = None
+        starts_on_face = False
+        face_region_available = len(face_points) >= 16
+        if face_region_available:
+            pad = max(float(torso or 0.0) * 0.12, 18.0)
+            face_x = [point[0] for point in face_points]
+            face_y = [point[1] for point in face_points]
+            face_min_x, face_max_x = np.percentile(face_x, (2.0, 98.0))
+            face_min_y, face_max_y = np.percentile(face_y, (2.0, 98.0))
+            face_box = (
+                face_min_x - pad,
+                face_max_x + pad,
+                face_min_y - pad,
+                face_max_y + pad,
+            )
+            starts_on_face = bool(
+                face_box[0] <= root[0] <= face_box[1]
+                and face_box[2] <= root[1] <= face_box[3]
+            )
+
+        resolution_scale = (
+            max(0.5, min(float(width) / 640.0, float(height) / 360.0))
+            if width and height else 1.0
+        )
+        minimum_travel = max(
+            35.0 * resolution_scale,
+            min(45.0 * resolution_scale, float(torso or 0.0) * 0.15),
+        )
 
         previous_root = self._hand_candidate_root.get(hand_key)
         continuity_limit = max(float(torso or 0.0) * 0.35, 45.0)
@@ -2199,18 +2282,60 @@ class CaptureSource:
         if not continuous or self._hand_candidate_since.get(hand_key, 0.0) <= 0.0:
             self._hand_candidate_since[hand_key] = now
             self._hand_candidate_frames[hand_key] = 1
+            self._hand_candidate_origin[hand_key] = root
+            self._hand_candidate_travel[hand_key] = 0.0
+            self._hand_candidate_motion_frames[hand_key] = 0
+            self._hand_candidate_face_bound[hand_key] = starts_on_face
+            self._hand_candidate_face_box[hand_key] = face_box
+            self._hand_candidate_off_face_frames[hand_key] = 0
         else:
             self._hand_candidate_frames[hand_key] += 1
+            if face_box is not None:
+                self._hand_candidate_face_box[hand_key] = face_box
+            if self._hand_candidate_face_bound.get(hand_key, False):
+                active_face_box = (
+                    face_box or self._hand_candidate_face_box.get(hand_key)
+                )
+                on_face = bool(
+                    active_face_box is not None
+                    and active_face_box[0] <= root[0] <= active_face_box[1]
+                    and active_face_box[2] <= root[1] <= active_face_box[3]
+                )
+                if on_face:
+                    self._hand_candidate_off_face_frames[hand_key] = 0
+                elif active_face_box is not None:
+                    off_face_frames = (
+                        self._hand_candidate_off_face_frames.get(hand_key, 0) + 1
+                    )
+                    self._hand_candidate_off_face_frames[hand_key] = off_face_frames
+                    if off_face_frames >= 2:
+                        self._hand_candidate_face_bound[hand_key] = False
+            origin = self._hand_candidate_origin.get(hand_key)
+            if origin is None:
+                origin = root
+                self._hand_candidate_origin[hand_key] = root
+            travel = (
+                (root[0] - origin[0]) ** 2
+                + (root[1] - origin[1]) ** 2
+            ) ** 0.5
+            self._hand_candidate_travel[hand_key] = travel
+            if travel >= minimum_travel:
+                self._hand_candidate_motion_frames[hand_key] = min(
+                    3,
+                    self._hand_candidate_motion_frames.get(hand_key, 0) + 1,
+                )
+            else:
+                self._hand_candidate_motion_frames[hand_key] = 0
         self._hand_candidate_root[hand_key] = root
 
         confirmed = bool(
             self._hand_candidate_frames[hand_key] >= 4
             and now - self._hand_candidate_since[hand_key] >= 0.18
+            and self._hand_candidate_motion_frames[hand_key] >= 2
+            and not self._hand_candidate_face_bound[hand_key]
         )
         if confirmed:
-            self._hand_candidate_since[hand_key] = 0.0
-            self._hand_candidate_frames[hand_key] = 0
-            self._hand_candidate_root[hand_key] = None
+            self._clear_hand_candidate(hand_key)
         return confirmed
 
     def _limit_hand_reacquisition_jump(
@@ -2788,10 +2913,12 @@ class CaptureSource:
         candidate_confirmed = {}
         for key in ("leftHand", "rightHand"):
             if key in duplicate_rejected:
+                self._clear_hand_candidate(key)
                 candidate_confirmed[key] = False
                 continue
             candidate_confirmed[key] = self._confirm_new_hand_candidate(
-                key, initial_raw_hands[key], body, width, height, torso, now
+                key, initial_raw_hands[key], body, payload.get("face"),
+                width, height, torso, now
             )
             if (
                 isinstance(initial_raw_hands[key], list)
@@ -3694,6 +3821,18 @@ class CaptureSource:
                 # a false candidate can keep its own recovery window alive.
                 if key not in recovered_keys:
                     self._hand_last_good_at[key] = now
+                    trusted_root = self._point_xy(smoothed_hand[0])
+                    if trusted_root is not None:
+                        if (
+                            width and height
+                            and abs(trusted_root[0]) <= 1.5
+                            and abs(trusted_root[1]) <= 1.5
+                        ):
+                            trusted_root = (
+                                trusted_root[0] * width,
+                                trusted_root[1] * height,
+                            )
+                        self._hand_last_trusted_root[key] = trusted_root
 
                 curl_source = (
                     payload.get(world_key)
