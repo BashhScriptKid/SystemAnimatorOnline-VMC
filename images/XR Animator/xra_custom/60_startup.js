@@ -224,9 +224,15 @@
         return XRA.nativeBridge.isAvatarReady();
       }
       if (window.MMD_SA?.MMD_started) {
-        const model = window.MMD_SA?.THREEX?.get_model?.(0);
-        if (model && !model.loading && !window.MMD_SA?.THREEX?._loading_model && (model.mesh || model.model || model.scene)) {
-          if (model.mesh && model.mesh.visible === false) return false;
+        const facade = window.MMD_SA?.THREEX?.get_model?.(0);
+        let model = facade;
+        if (facade?.type === 'MMD_dummy') {
+          try { model = facade.model || null; }
+          catch (_) { model = null; }
+        }
+        const scene = model?.model?.scene || model?.mesh || model?.scene || null;
+        if (model && !facade?.loading && !model.loading && !window.MMD_SA?.THREEX?._loading_model && scene) {
+          if (scene.visible === false) return false;
           return true;
         }
       }

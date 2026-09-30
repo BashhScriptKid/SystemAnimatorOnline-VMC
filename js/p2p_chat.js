@@ -611,12 +611,24 @@
           return true;
         }
       }
-      if (incomingAvatarStreamId !== streamId) {
+      const isNewStream = incomingAvatarStreamId !== streamId;
+      if (isNewStream) {
         incomingAvatarStreamId = streamId;
         incomingAvatarLastPoseAt = performance.now();
         lastLocalReceiverRecording = null;
         appendMessage('system', 'L’altro partecipante sta inviando il proprio avatar.');
-        try { animatorWindow()?.XRA?.secondAvatar?.startSession?.(payload); } catch (_) {}
+      }
+      // The start heartbeat can arrive while the animator window is still
+      // booting. Keep the stream id, but retry once its 3D manager exists;
+      // otherwise every later pose is rejected because the manager is idle.
+      const manager = animatorWindow()?.XRA?.secondAvatar;
+      const managerStatus = manager?.status;
+      if (typeof manager?.startSession === 'function'
+        && (isNewStream || managerStatus?.active !== true || managerStatus?.streamId !== streamId)) {
+        try {
+          const start = manager.startSession(payload);
+          start?.catch?.(() => {});
+        } catch (_) {}
       }
       sendReceiverRecordingState(true);
       updateAvatarButtonUi();

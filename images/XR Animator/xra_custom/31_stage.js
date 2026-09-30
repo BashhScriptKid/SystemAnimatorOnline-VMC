@@ -26,7 +26,15 @@
   }
 
   function getAvatarModel() {
-    return window.MMD_SA?.THREEX?.get_model?.(0) || window.MMD_SA?.THREEX?.models?.[0] || null;
+    const avatar = window.MMD_SA?.THREEX?.get_model?.(0) || window.MMD_SA?.THREEX?.models?.[0] || null;
+    // The legacy runtime installs an MMD facade before its backing model is
+    // loaded. Accessing facade.mesh during that window throws inside the
+    // historical getter and aborts the whole before-render callback.
+    if (avatar?.type === 'MMD_dummy') {
+      try { if (!avatar.model) return null; }
+      catch (_) { return null; }
+    }
+    return avatar;
   }
 
   function isVRMModel(avatar) {

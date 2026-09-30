@@ -111,6 +111,18 @@
     return Array.isArray(list) ? list : [];
   }
 
+  function resolvedAvatarModel(model) {
+    if (!model) return null;
+    if (model.type !== 'MMD_dummy') return model;
+    try { return model.model || null; }
+    catch (_) { return null; }
+  }
+
+  function avatarScene(model) {
+    const resolved = resolvedAvatarModel(model);
+    return resolved?.model?.scene || resolved?.mesh || resolved?.scene || null;
+  }
+
   function extraModelPaths() {
     const list = window.MMD_SA_options?.THREEX_options?.model_path_extra;
     return Array.isArray(list) ? list.slice() : [];
@@ -282,7 +294,7 @@
     const beforeModels = modelList().slice();
     const beforePaths = extraModelPaths();
     const beforeActive = beforeModels[0] || null;
-    const beforeActiveScene = beforeActive?.model?.scene || beforeActive?.mesh || beforeActive?.scene || null;
+    const beforeActiveScene = avatarScene(beforeActive);
     const filename = file.name || basename(file.path) || 'VRM';
     if (!quiet) XRA.toast(`Caricamento avatar: ${filename}…`, 'info', 2500);
     events.emit('avatar-loading', { name: filename });
@@ -322,7 +334,7 @@
       // an unswapped model must never produce a false "avatar loaded" result.
       const afterModels = modelList();
       const afterActive = afterModels[0] || null;
-      const afterActiveScene = afterActive?.model?.scene || afterActive?.mesh || afterActive?.scene || null;
+      const afterActiveScene = avatarScene(afterActive);
       const activeChanged = !!afterActive && (
         afterActive !== beforeActive ||
         (!!afterActiveScene && afterActiveScene !== beforeActiveScene)
@@ -362,11 +374,13 @@
     if (vrmLoadBusy || vrmRestoreInFlight) return false;
     const filename = savedAvatarFilename();
     if (filename && !initialVrmRestored) return false;
-    const model = window.MMD_SA?.THREEX?.get_model?.(0);
+    const facade = window.MMD_SA?.THREEX?.get_model?.(0);
+    const model = resolvedAvatarModel(facade);
     if (!model) return false;
-    if (model.loading || window.MMD_SA?.THREEX?._loading_model) return false;
-    if (!model.mesh && !model.model && !model.scene) return false;
-    if (model.mesh && model.mesh.visible === false) return false;
+    if (facade?.loading || model.loading || window.MMD_SA?.THREEX?._loading_model) return false;
+    const scene = avatarScene(model);
+    if (!scene) return false;
+    if (scene.visible === false) return false;
     return true;
   }
 

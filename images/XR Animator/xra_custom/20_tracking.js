@@ -16,6 +16,7 @@
   let bodyStable = false;
   let bodyAnchorMix = 0;
   let bodyTransition = null;
+  let controlChannel = null;
 
   try {
     controlChannel = new BroadcastChannel('XRA_CONTROL');
@@ -523,8 +524,12 @@
 
   function getVRMModelX() {
     const threex = window.MMD_SA?.THREEX;
-    try { return threex?.get_model?.(0) || threex?.models?.[0] || null; }
-    catch (e) { return threex?.models?.[0] || null; }
+    let model = null;
+    try { model = threex?.get_model?.(0) || threex?.models?.[0] || null; }
+    catch (e) { model = threex?.models?.[0] || null; }
+    if (model?.type !== 'MMD_dummy') return model;
+    try { return model.model ? model : null; }
+    catch (e) { return null; }
   }
 
   function avatarRootNodes() {
