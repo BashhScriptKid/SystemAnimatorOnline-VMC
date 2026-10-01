@@ -13,6 +13,64 @@ MEDIAPIPE_VERSION="${XRA_MEDIAPIPE_VERSION:-1.0.1}"
 WHEELS_DIR="$ROOT_DIR/xra_backends/wheels"
 BUNDLE_DIR="$ROOT_DIR/release/XR_Animator_Bundled"
 OFFLINE="${XRA_OFFLINE:-0}"
+RELEASE_VERSION="${XRA_RELEASE_VERSION:-}"
+
+usage() {
+  cat <<'EOF'
+Usage: ./build.sh [VERSION]
+       ./build.sh --version VERSION
+
+Build XR Animator and create release/XRA_vVERSION_Linux_x64.zip.
+If VERSION is omitted in an interactive terminal, the script asks for it.
+For unattended builds use the argument or XRA_RELEASE_VERSION.
+EOF
+}
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    -v|--version)
+      if [ "$#" -lt 2 ]; then
+        echo "ERROR: $1 requires a version." >&2
+        exit 2
+      fi
+      RELEASE_VERSION="$2"
+      shift 2
+      ;;
+    -* )
+      echo "ERROR: unknown option: $1" >&2
+      usage >&2
+      exit 2
+      ;;
+    *)
+      if [ -n "$RELEASE_VERSION" ]; then
+        echo "ERROR: specify the release version only once." >&2
+        exit 2
+      fi
+      RELEASE_VERSION="$1"
+      shift
+      ;;
+  esac
+done
+
+if [ -z "$RELEASE_VERSION" ]; then
+  if [ -t 0 ]; then
+    version_input=""
+    read -r -p "Release version [1.0.0]: " version_input || true
+    RELEASE_VERSION="${version_input:-1.0.0}"
+  else
+    RELEASE_VERSION="1.0.0"
+    echo "[build] No release version supplied; using $RELEASE_VERSION."
+  fi
+fi
+RELEASE_VERSION="${RELEASE_VERSION#v}"
+if [[ ! "$RELEASE_VERSION" =~ ^[0-9A-Za-z][0-9A-Za-z._-]*$ ]]; then
+  echo "ERROR: invalid release version: $RELEASE_VERSION" >&2
+  exit 2
+fi
 
 cleanup_files=()
 cleanup() {
@@ -28,6 +86,7 @@ echo " XR Animator v9.2 - bundled NW.js build"
 echo " Python 3.11 + native MediaPipe Tasks"
 echo "=================================================="
 echo "Repository: $ROOT_DIR"
+echo "Release:    $RELEASE_VERSION"
 
 create_venv() {
   mkdir -p -- "$(dirname -- "$VENV_DIR")"
@@ -44,7 +103,7 @@ create_venv() {
 }
 
 if [ -x "$PYTHON_BIN" ]; then
-  actual="$($PYTHON_BIN -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
+  actual="$("$PYTHON_BIN" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
   if [ "$actual" != "$PYTHON_VERSION" ]; then
     backup="$VENV_DIR.incompatible.$(date +%Y%m%d-%H%M%S)"
     echo "[build] Existing venv is Python $actual; moving it to: $backup"
@@ -76,7 +135,8 @@ ensure_pip() {
     exit 5
   fi
 
-  local get_pip="$(mktemp "${TMPDIR:-/tmp}/xra-get-pip.XXXXXX.py")"
+  local get_pip
+  get_pip="$(mktemp "${TMPDIR:-/tmp}/xra-get-pip.XXXXXX.py")"
   cleanup_files+=("$get_pip")
 
   if command -v curl >/dev/null 2>&1; then
@@ -98,8 +158,8 @@ PY_GET_PIP
 
 ensure_pip
 
-echo "[build] Python: $($PYTHON_BIN --version)"
-echo "[build] pip: $($PYTHON_BIN -m pip --version)"
+echo "[build] Python: $("$PYTHON_BIN" --version)"
+echo "[build] pip: $("$PYTHON_BIN" -m pip --version)"
 
 PIP_SOURCE_ARGS=()
 if [ -d "$WHEELS_DIR" ]; then
@@ -170,8 +230,7 @@ NW_TAR="nwjs-${NW_VER}-linux-x64.tar.gz"
 if [ ! -d "$NW_CACHE_DIR/$NW_FOLDER" ]; then
     echo "[build] NW.js runtime missing. Downloading ${NW_VER}..."
     mkdir -p "$NW_CACHE_DIR"
-    wget -q -O "$NW_CACHE_DIR/$NW_TAR" "https://dl.nwjs.io/${NW_VER}/${NW_TAR}"
-    if [ $? -eq 0 ]; then
+    if wget -q -O "$NW_CACHE_DIR/$NW_TAR" "https://dl.nwjs.io/${NW_VER}/${NW_TAR}"; then
         echo "[build] Extracting NW.js..."
         tar -xzf "$NW_CACHE_DIR/$NW_TAR" -C "$NW_CACHE_DIR"
     else
@@ -208,9 +267,21 @@ for doc_file in "LEGGIMI_PODCASTER.txt" "README_PODCASTER.txt" "xra_profile_exam
   fi
 done
 
+echo "[build] Creating clean release archive..."
+"$PYTHON_BIN" "$ROOT_DIR/tools/package_release.py" --version "$RELEASE_VERSION"
+
+ARCHIVE_PATH="$ROOT_DIR/release/XRA_v${RELEASE_VERSION}_Linux_x64.zip"
+CHECKSUM_PATH="$ARCHIVE_PATH.sha256"
+if [ ! -f "$ARCHIVE_PATH" ] || [ ! -f "$CHECKSUM_PATH" ]; then
+  echo "ERROR: release archive or checksum was not produced." >&2
+  exit 7
+fi
+
 echo "=================================================="
 echo "Build complete"
 echo "Bundle: $BUNDLE_DIR"
 echo "Launch: $BUNDLE_DIR/XR_Animator"
 echo "or:     $ROOT_DIR/XR_Animator"
+echo "Archive: $ARCHIVE_PATH"
+echo "SHA256:  $CHECKSUM_PATH"
 echo "=================================================="

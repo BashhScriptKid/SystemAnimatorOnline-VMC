@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import tempfile
@@ -83,7 +84,7 @@ def archive(version: str) -> tuple[Path, str]:
     if not (BUNDLE / "XR_Animator").is_file() or not (BUNDLE / "runtime").is_dir():
         raise SystemExit("Bundled build missing or still uses the old flat layout; run ./build.sh first.")
 
-    release_name = f"XR_Animator_Podcasters_v{version}_Linux_x64"
+    release_name = f"XRA_v{version}_Linux_x64"
     output = ROOT / "release" / f"{release_name}.zip"
     checksum_file = output.with_suffix(output.suffix + ".sha256")
 
@@ -109,9 +110,14 @@ def archive(version: str) -> tuple[Path, str]:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--version", default="1.0.0")
+    parser.add_argument("--version", required=True, help="release version only, for example 1.0.0")
     args = parser.parse_args()
-    output, digest = archive(args.version)
+    version = args.version.removeprefix("v")
+    if not re.fullmatch(r"[0-9A-Za-z][0-9A-Za-z._-]*", version):
+        parser.error("version may contain only letters, numbers, dots, underscores and hyphens")
+    if shutil.which("zip") is None:
+        parser.error("the 'zip' command is required to create the release archive")
+    output, digest = archive(version)
     print(f"Archive: {output}")
     print(f"SHA256:  {digest}")
     return 0
