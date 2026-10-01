@@ -119,7 +119,7 @@ Peer-to-Peer audio, chat, and screen sharing with zero third-party servers.
 -------------------------------------------------------------------------------
 
 Included in this distribution is the pre-tuned profile:
-  -> xra_profile_example_low_spec.json
+  -> runtime/xra_profile_example_low_spec.json
 
 This preset is fine-tuned for mid-range CPUs or laptops with integrated graphics
 (such as Intel UHD Graphics 630 on 10th Gen Core i5):
@@ -130,8 +130,8 @@ This preset is fine-tuned for mid-range CPUs or laptops with integrated graphics
 - Body stabilization and Noise Gate: Pre-configured.
 
 To apply this preset:
-1. Rename or copy `xra_profile_example_low_spec.json` to `xra_profile.json`
-   in the root directory of XR Animator.
+1. Copy `runtime/xra_profile_example_low_spec.json` to `xra_profile.json`
+   in the root directory of XR Animator, replacing the current profile.
 2. Launch XR Animator: the profile will be applied automatically.
 
 -------------------------------------------------------------------------------

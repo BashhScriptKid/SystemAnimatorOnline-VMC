@@ -129,27 +129,31 @@ int main(int argc, char *argv[]) {
     }
     exe_path[len] = '\0';
 
-    char *dir = dirname(exe_path);
+    char bundle_dir[PATH_MAX];
+    snprintf(bundle_dir, sizeof(bundle_dir), "%s", dirname(exe_path));
 
-    char profile_dir[PATH_MAX];
-    snprintf(profile_dir, sizeof(profile_dir), "%s/.nw-profile", dir);
-    mkdir(profile_dir, 0755);
+    char runtime_dir[PATH_MAX];
+    snprintf(runtime_dir, sizeof(runtime_dir), "%s/runtime", bundle_dir);
 
     char browser_path[PATH_MAX];
-    snprintf(browser_path, sizeof(browser_path), "%s/xra_browser", dir);
+    snprintf(browser_path, sizeof(browser_path), "%s/xra_browser", runtime_dir);
 
     if (access(browser_path, X_OK) != 0) {
-        char fallback_dir[PATH_MAX];
-        snprintf(fallback_dir, sizeof(fallback_dir), "%s/release/XR_Animator_Bundled", dir);
+        char fallback_bundle[PATH_MAX];
+        snprintf(fallback_bundle, sizeof(fallback_bundle), "%s/release/XR_Animator_Bundled", bundle_dir);
         char fallback_browser[PATH_MAX];
-        snprintf(fallback_browser, sizeof(fallback_browser), "%s/xra_browser", fallback_dir);
+        snprintf(fallback_browser, sizeof(fallback_browser), "%s/runtime/xra_browser", fallback_bundle);
         if (access(fallback_browser, X_OK) == 0) {
-            dir = strdup(fallback_dir);
+            snprintf(bundle_dir, sizeof(bundle_dir), "%s", fallback_bundle);
+            snprintf(runtime_dir, sizeof(runtime_dir), "%s/runtime", bundle_dir);
             snprintf(browser_path, sizeof(browser_path), "%s", fallback_browser);
-            snprintf(profile_dir, sizeof(profile_dir), "%s/.nw-profile", dir);
-            mkdir(profile_dir, 0755);
         }
     }
+
+    char profile_dir[PATH_MAX];
+    snprintf(profile_dir, sizeof(profile_dir), "%s/.nw-profile", runtime_dir);
+    mkdir(profile_dir, 0755);
+    setenv("XRA_PROFILE_ROOT", bundle_dir, 1);
 
     char user_data_arg[PATH_MAX + 32];
     snprintf(user_data_arg, sizeof(user_data_arg), "--user-data-dir=%s", profile_dir);
@@ -168,7 +172,7 @@ int main(int argc, char *argv[]) {
     new_argv[0] = browser_path;
     new_argv[1] = user_data_arg;
     int next_arg = 2;
-    apply_gpu_preference(dir, new_argv, &next_arg, use_wayland);
+    apply_gpu_preference(bundle_dir, new_argv, &next_arg, use_wayland);
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--obs-debug") == 0) {
             /* Debug mode pairs the owned-camera feed with a local landmark log. */

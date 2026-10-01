@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -15,6 +16,7 @@ BASE_RELEASE = ROOT / "release" / "XR_Animator"
 TARGET = ROOT / "release" / "XR_Animator_Bundled"
 NW_RUNTIME = ROOT / "cache" / "nwjs-v0.115.0-linux-x64"
 NW_PACKAGE = ROOT / "packaging" / "nw"
+RUNTIME_DIRNAME = "runtime"
 
 # These paths are created or edited by the packaged application.  A rebuild
 # replaces the bundle, but must not silently replace the user's local state.
@@ -30,12 +32,43 @@ PERSISTENT_PATHS = (
     ".xra_recording_sessions",
 )
 
+# Some distro-provided libraries embed the packager's absolute home directory
+# in C assertion messages. Keep replacements exactly the same length so
+# sanitizing the already-linked ELF files cannot move any data.
+EMBEDDED_HOME_PATH = re.compile(rb"/home/[^/\x00]+/")
+
+
+def sanitize_embedded_build_paths(bundle: Path) -> int:
+    """Remove private build-machine paths without changing binary sizes."""
+    replacements = 0
+
+    def neutral_path(match: re.Match[bytes]) -> bytes:
+        private = match.group(0)
+        neutral = b"/build/" + (b"_" * (len(private) - len(b"/build/")))
+        if len(private) != len(neutral):
+            raise RuntimeError("Embedded-path replacements must preserve length")
+        return neutral
+
+    for path in bundle.rglob("*"):
+        if not path.is_file() or path.is_symlink():
+            continue
+        contents = path.read_bytes()
+        if not contents.startswith(b"\x7fELF"):
+            continue
+        sanitized, occurrences = EMBEDDED_HOME_PATH.subn(neutral_path, contents)
+        replacements += occurrences
+        if sanitized != contents:
+            path.write_bytes(sanitized)
+    return replacements
+
 
 def snapshot_user_data(staging: Path) -> None:
     if not TARGET.is_dir():
         return
     for name in PERSISTENT_PATHS:
-        source = TARGET / name
+        root_source = TARGET / name
+        runtime_source = TARGET / RUNTIME_DIRNAME / name
+        source = root_source if root_source.exists() else runtime_source
         destination = staging / name
         if source.is_dir():
             shutil.copytree(source, destination, symlinks=True)
@@ -53,6 +86,17 @@ def restore_user_data(staging: Path) -> None:
         elif source.is_file():
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(source, destination)
+
+
+def organize_runtime() -> Path:
+    """Keep the public bundle root limited to launcher, profile and runtime."""
+    runtime = TARGET / RUNTIME_DIRNAME
+    runtime.mkdir(exist_ok=True)
+    for item in tuple(TARGET.iterdir()):
+        if item.name in {"XR_Animator", "xra_profile.json", RUNTIME_DIRNAME}:
+            continue
+        shutil.move(str(item), runtime / item.name)
+    return runtime
 
 
 def copy_runtime() -> None:
@@ -114,12 +158,6 @@ def main() -> int:
     subprocess.run(["gcc", "-O2", "-s", str(bundled_launcher_src), "-o", str(TARGET / "XR_Animator")], check=True)
     subprocess.run(["gcc", "-O2", "-s", str(root_launcher_src), "-o", str(ROOT / "XR_Animator")], check=True)
 
-    for executable in (
-        TARGET / "XR_Animator", ROOT / "XR_Animator", TARGET / "xra_browser",
-        TARGET / "xra_server", TARGET / "chrome_crashpad_handler",
-    ):
-        executable.chmod(executable.stat().st_mode | 0o111)
-
     # Clean up intermediate unbundled release so only the bundled build remains
     if BASE_RELEASE.exists():
         shutil.rmtree(BASE_RELEASE)
@@ -129,8 +167,18 @@ def main() -> int:
         if src.is_file():
             shutil.copy2(src, TARGET / doc)
 
+    runtime = organize_runtime()
+    sanitized_paths = sanitize_embedded_build_paths(runtime)
+
+    for executable in (
+        TARGET / "XR_Animator", ROOT / "XR_Animator", runtime / "xra_browser",
+        runtime / "xra_server", runtime / "chrome_crashpad_handler",
+    ):
+        executable.chmod(executable.stat().st_mode | 0o111)
+
     print(f"[XRA] Bundled browser ready: {TARGET / 'XR_Animator'}")
     print(f"[XRA] Root launcher ready (ELF double-click): {ROOT / 'XR_Animator'}")
+    print(f"[XRA] Sanitized private build paths: {sanitized_paths}")
     print("[XRA] Chromium launched as shell; XR Animator runs on local HTTP.")
     print("[XRA] Intermediate unbundled folder removed: kept bundled build only.")
     return 0

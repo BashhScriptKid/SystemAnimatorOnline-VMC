@@ -16,7 +16,6 @@ EXTRA_FILES = {
     "props/cup.glb",
     "props/microphone.glb",
     "stages/default_stage.glb",
-    "stages/recording+studio.fbx",
     "xra_backends/object_detector.py",
     "xr_launcher.py",
 }

@@ -187,24 +187,24 @@ if [ ! -x "$BUNDLE_DIR/XR_Animator" ]; then
   echo "ERROR: bundled launcher was not produced: $BUNDLE_DIR/XR_Animator" >&2
   exit 6
 fi
-if [ ! -x "$BUNDLE_DIR/xra_server" ]; then
-  echo "ERROR: bundled Python server was not produced: $BUNDLE_DIR/xra_server" >&2
+if [ ! -x "$BUNDLE_DIR/runtime/xra_server" ]; then
+  echo "ERROR: bundled Python server was not produced: $BUNDLE_DIR/runtime/xra_server" >&2
   exit 6
 fi
-if [ ! -x "$BUNDLE_DIR/xra_browser" ]; then
-  echo "ERROR: bundled NW.js browser was not produced: $BUNDLE_DIR/xra_browser" >&2
+if [ ! -x "$BUNDLE_DIR/runtime/xra_browser" ]; then
+  echo "ERROR: bundled NW.js browser was not produced: $BUNDLE_DIR/runtime/xra_browser" >&2
   exit 6
 fi
-if [ ! -d "$BUNDLE_DIR/package.nw" ]; then
-  echo "ERROR: NW.js package payload was not produced: $BUNDLE_DIR/package.nw" >&2
+if [ ! -d "$BUNDLE_DIR/runtime/package.nw" ]; then
+  echo "ERROR: NW.js package payload was not produced: $BUNDLE_DIR/runtime/package.nw" >&2
   exit 6
 fi
 
 echo "[build] Copying Podcaster documentation and preset profile..."
 for doc_file in "LEGGIMI_PODCASTER.txt" "README_PODCASTER.txt" "xra_profile_example_low_spec.json"; do
   if [ -f "$ROOT_DIR/$doc_file" ]; then
-    cp -f "$ROOT_DIR/$doc_file" "$BUNDLE_DIR/$doc_file"
-    echo "[build] Copied $doc_file to $BUNDLE_DIR/"
+    cp -f "$ROOT_DIR/$doc_file" "$BUNDLE_DIR/runtime/$doc_file"
+    echo "[build] Copied $doc_file to $BUNDLE_DIR/runtime/"
   fi
 done
 

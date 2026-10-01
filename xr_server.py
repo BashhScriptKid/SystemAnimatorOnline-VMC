@@ -17,11 +17,14 @@ if getattr(sys, "frozen", False):
     if importlib.machinery.PathFinder not in sys.meta_path[:1]:
         sys.meta_path.insert(0, importlib.machinery.PathFinder)
 
+if getattr(sys, 'frozen', False):
+    _runtime_root = Path(sys.executable).resolve().parent
+else:
+    _runtime_root = Path(__file__).resolve().parent
+_profile_root = Path(os.environ.get("XRA_PROFILE_ROOT") or _runtime_root).resolve()
+
 try:
-    if getattr(sys, 'frozen', False):
-        _prof_path = Path(sys.executable).resolve().parent / "xra_profile.json"
-    else:
-        _prof_path = Path(__file__).resolve().parent / "xra_profile.json"
+    _prof_path = _profile_root / "xra_profile.json"
     if _prof_path.is_file():
         with open(_prof_path, "r", encoding="utf-8") as _f:
             _perf = json.load(_f).get("custom", {}).get("performance", {})
@@ -79,12 +82,10 @@ def _start_backend_provisioning():
 _BACKEND_PROVISION_STARTED = False
 _start_backend_provisioning()
 
-if getattr(sys, 'frozen', False):
-    ROOT = Path(sys.executable).resolve().parent
-else:
-    ROOT = Path(__file__).resolve().parent
+ROOT = _runtime_root
+PROFILE_ROOT = _profile_root
 
-PROFILE_FILE = ROOT / "xra_profile.json"
+PROFILE_FILE = PROFILE_ROOT / "xra_profile.json"
 BACKUP_FILE = ROOT / "xra_profile.backup.json"
 LOCK = threading.Lock()
 RECORDING_LOCK = threading.Lock()

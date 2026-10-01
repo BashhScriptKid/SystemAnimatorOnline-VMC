@@ -117,7 +117,7 @@ in modalità Peer-to-Peer diretta crittografata (senza passare da server esterni
 -------------------------------------------------------------------------------
 
 Nel progetto trovi il file preconfigurato:
-  -> xra_profile_example_low_spec.json
+  -> runtime/xra_profile_example_low_spec.json
 
 Questo preset è stato tarato per processori di fascia media o notebook con
 grafica integrata (Intel UHD Graphics) come l'i5 di 10a generazione:
@@ -128,8 +128,8 @@ grafica integrata (Intel UHD Graphics) come l'i5 di 10a generazione:
 - Stabilizzazione corpo e Noise Gate: pre-attivati.
 
 Per usarlo:
-1. Rinomina o copia `xra_profile_example_low_spec.json` in `xra_profile.json`
-   nella cartella di XR Animator.
+1. Copia `runtime/xra_profile_example_low_spec.json` in `xra_profile.json`
+   nella cartella principale di XR Animator, sostituendo il profilo corrente.
 2. Avvia XR Animator: il preset verrà caricato automaticamente.
 
 -------------------------------------------------------------------------------
