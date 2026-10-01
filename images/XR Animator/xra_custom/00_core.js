@@ -1004,6 +1004,9 @@
         canvas.classList.add('xra-mocap-wireframe-front');
         canvas.style.setProperty('pointer-events', 'none', 'important');
       }
+      if (canvas.dataset.xraMocapLayoutReady !== '1') {
+        canvas.classList.add('xra-mocap-wireframe-pending');
+      }
       // A large z-index cannot escape XR Animator's transformed stacking
       // context. Reparent the existing canvas (not a copy) to a top-level
       // overlay so the WebGL stage can never cover it.
@@ -1016,7 +1019,16 @@
   window.addEventListener('MMDStarted', () => {
     for (const delay of [0, 250, 900, 2000]) setTimeout(ensureMocapWireframeLayer, delay);
   });
-  events.on('camera-started', () => setTimeout(ensureMocapWireframeLayer, 0));
+
+  function markMocapWireframeLayoutPending(cam = window.System?._browser?.camera) {
+    for (const canvas of ensureMocapWireframeLayer(cam)) {
+      delete canvas.dataset.xraMocapLayoutReady;
+      canvas.classList.add('xra-mocap-wireframe-pending');
+    }
+  }
+
+  events.on('camera-started', () => setTimeout(markMocapWireframeLayoutPending, 0));
+  events.on('camera-stopped', () => markMocapWireframeLayoutPending());
 
   function syncCameraCanvasesLayout(cam, cw, ch) {
     if (!cam) return;
@@ -1093,6 +1105,8 @@
         }
         if (fmStyle.pixelWidth !== wf_w) fmStyle.pixelWidth = wf_w;
         if (fmStyle.pixelHeight !== wf_h) fmStyle.pixelHeight = wf_h;
+        wireframeCanvas.dataset.xraMocapLayoutReady = '1';
+        wireframeCanvas.classList.remove('xra-mocap-wireframe-pending');
       }
     } catch (e) {}
   }

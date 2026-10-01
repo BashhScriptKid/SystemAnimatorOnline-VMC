@@ -81,6 +81,13 @@ html.xra-eco-mode #SL {
   pointer-events: none !important;
 }
 
+/* The native canvas exists before its first mocap packet supplies the final
+   dimensions and offsets. Keep its default 300x150 position from flashing in
+   the top-left corner while that first layout is still pending. */
+.xra-mocap-wireframe-front.xra-mocap-wireframe-pending {
+  visibility: hidden !important;
+}
+
 /* ============================================================
    RIGHT — custom controls. Header is intentionally transparent:
    no black rectangle behind HANDS / hide button.
