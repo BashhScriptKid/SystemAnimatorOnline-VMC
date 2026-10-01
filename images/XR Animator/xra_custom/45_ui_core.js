@@ -23,7 +23,9 @@
   function button(text, cls = 'xra-action') {
     const node = el('button', cls, text);
     node.type = 'button';
-    queueMicrotask(() => XRA.help?.attach?.(node, text));
+    queueMicrotask(() => XRA.help?.attach?.(node, text, {
+      text: 'Runs this action.', impact: 'none'
+    }));
     return node;
   }
 
@@ -84,7 +86,9 @@
     label.appendChild(el('div', 'xra-label', labelText));
     if (sub) label.appendChild(el('div', 'xra-sub', sub));
     r.append(label, control);
-    queueMicrotask(() => XRA.help?.attach?.(r, labelText));
+    queueMicrotask(() => XRA.help?.attach?.(r, labelText, {
+      text: sub || 'Adjusts this setting.', impact: 'none'
+    }));
     if (reset) {
       const resetNode = resetButton(reset, isDefault || (() => false));
       r.appendChild(resetNode);
@@ -104,7 +108,9 @@
     const node = el('details', 'xra-details' + (cls ? ' ' + cls : ''));
     node.open = !!open;
     const summary = el('summary', '', title);
-    queueMicrotask(() => XRA.help?.attach?.(summary, title));
+    queueMicrotask(() => XRA.help?.attach?.(summary, title, {
+      text: 'Opens or closes this section.', impact: 'none'
+    }));
     node.appendChild(summary);
     const body = el('div', 'xra-details-body');
     node.appendChild(body);

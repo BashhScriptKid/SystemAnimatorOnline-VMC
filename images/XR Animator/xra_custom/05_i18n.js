@@ -389,7 +389,16 @@
     "📹 Webcam Capture": "📹 Webcam Capture",
     "🖐️ Arms & Hands": "🖐️ Arms & Hands",
     "🤖 Motore Tracking (MediaPipe Tasks)": "🤖 Tracking Engine (MediaPipe Tasks)",
-    "🤖 Tracking Engine (MediaPipe Tasks)": "🤖 Tracking Engine (MediaPipe Tasks)"
+    "🤖 Tracking Engine (MediaPipe Tasks)": "🤖 Tracking Engine (MediaPipe Tasks)",
+    "Con pose non-Full Body (es. busto o scrivania), la modalità Full viene limitata automaticamente a Upper body.": "With non-Full Body poses (for example torso or desk), Full mode is automatically limited to Upper body.",
+    "Keep arms in front": "Keep arms in front",
+    "Front clearance": "Front clearance",
+    "Face camera": "Face camera",
+    "Avatar rotation Y (trim)": "Avatar rotation Y (trim)",
+    "Rotation Y (trim)": "Rotation Y (trim)",
+    "Runs this action.": "Runs this action.",
+    "Adjusts this setting.": "Adjusts this setting.",
+    "Opens or closes this section.": "Opens or closes this section."
   },
   "it": {
     "+ Importa scenografia 3D (.glb / .fbx)": "+ Importa scenografia 3D (.glb / .fbx)",
@@ -1067,7 +1076,21 @@
     "📹 Webcam Capture": "📹 Acquisizione Webcam",
     "🖐️ Arms & Hands": "🖐️ Braccia e mani",
     "🤖 Motore Tracking (MediaPipe Tasks)": "🤖 Motore Tracking (MediaPipe Tasks)",
-    "🤖 Tracking Engine (MediaPipe Tasks)": "🤖 Motore Tracking (MediaPipe Tasks)"
+    "🤖 Tracking Engine (MediaPipe Tasks)": "🤖 Motore Tracking (MediaPipe Tasks)",
+    "With non-Full Body poses (for example torso or desk), Full mode is automatically limited to Upper body.": "Con pose non-Full Body (ad esempio busto o scrivania), la modalità Full viene limitata automaticamente a Upper body.",
+    "Keep arms in front": "Mantieni le braccia davanti",
+    "Front clearance": "Distanza frontale",
+    "Face camera": "Rivolgi verso la camera",
+    "Avatar rotation Y (trim)": "Rotazione Y avatar (regolazione fine)",
+    "Rotation Y (trim)": "Rotazione Y (regolazione fine)",
+    "Runs this action.": "Esegue questa azione.",
+    "Adjusts this setting.": "Regola questa impostazione.",
+    "Opens or closes this section.": "Apre o chiude questa sezione.",
+    "Constrains wrists and elbows to the camera-facing coronal plane and prevents head penetration using smooth 3D spatial constraints.": "Mantiene polsi e gomiti davanti al piano del busto rivolto alla camera e impedisce che entrino nella testa con vincoli 3D graduali.",
+    "Minimum depth in front of the torso plane, expressed as a percentage of shoulder width.": "Distanza minima davanti al piano del busto, espressa in percentuale della larghezza delle spalle.",
+    "Automatically faces the active camera. Rotation Y remains available as a fine trim.": "Orienta automaticamente l’avatar verso la camera attiva. La rotazione Y resta disponibile come regolazione fine.",
+    "Automatically faces the remote avatar toward the active camera. Rotation Y remains a fine trim.": "Orienta automaticamente l’avatar remoto verso la camera attiva. La rotazione Y resta una regolazione fine.",
+    "Fine yaw adjustment added after Face camera alignment.": "Regolazione fine dell’imbardata applicata dopo l’allineamento alla camera."
   },
   "es": {
     "1 frame": "1 fotograma",
@@ -1497,7 +1520,21 @@
     "📹 Webcam Capture": "📹 Captura de cámara web",
     "🖐️ Arms & Hands": "🖐️ Brazos y manos",
     "🤖 Motore Tracking (MediaPipe Tasks)": "🤖 Motor de seguimiento (MediaPipe Tasks)",
-    "🤖 Tracking Engine (MediaPipe Tasks)": "🤖 Motor de seguimiento (MediaPipe Tasks)"
+    "🤖 Tracking Engine (MediaPipe Tasks)": "🤖 Motor de seguimiento (MediaPipe Tasks)",
+    "With non-Full Body poses (for example torso or desk), Full mode is automatically limited to Upper body.": "Con poses que no son de cuerpo completo (por ejemplo, torso o escritorio), el modo Completo se limita automáticamente a Tren superior.",
+    "Keep arms in front": "Mantener los brazos delante",
+    "Front clearance": "Distancia frontal",
+    "Face camera": "Mirar a la cámara",
+    "Avatar rotation Y (trim)": "Rotación Y del avatar (ajuste fino)",
+    "Rotation Y (trim)": "Rotación Y (ajuste fino)",
+    "Runs this action.": "Ejecuta esta acción.",
+    "Adjusts this setting.": "Ajusta esta opción.",
+    "Opens or closes this section.": "Abre o cierra esta sección.",
+    "Constrains wrists and elbows to the camera-facing coronal plane and prevents head penetration using smooth 3D spatial constraints.": "Mantiene muñecas y codos delante del plano del torso orientado a la cámara y evita que atraviesen la cabeza mediante restricciones 3D suaves.",
+    "Minimum depth in front of the torso plane, expressed as a percentage of shoulder width.": "Distancia mínima delante del plano del torso, expresada como porcentaje del ancho de los hombros.",
+    "Automatically faces the active camera. Rotation Y remains available as a fine trim.": "Orienta automáticamente el avatar hacia la cámara activa. La rotación Y sigue disponible como ajuste fino.",
+    "Automatically faces the remote avatar toward the active camera. Rotation Y remains a fine trim.": "Orienta automáticamente el avatar remoto hacia la cámara activa. La rotación Y sigue siendo un ajuste fino.",
+    "Fine yaw adjustment added after Face camera alignment.": "Ajuste fino de giro aplicado después de la alineación con la cámara."
   },
   "fr": {
     "1 frame": "1 image",
@@ -1922,7 +1959,21 @@
     "📹 Webcam Capture": "📹 Capture de webcam",
     "🖐️ Arms & Hands": "🖐️ Bras et mains",
     "🤖 Motore Tracking (MediaPipe Tasks)": "🤖 Moteur de suivi (MediaPipe Tasks)",
-    "🤖 Tracking Engine (MediaPipe Tasks)": "🤖 Moteur de suivi (MediaPipe Tasks)"
+    "🤖 Tracking Engine (MediaPipe Tasks)": "🤖 Moteur de suivi (MediaPipe Tasks)",
+    "With non-Full Body poses (for example torso or desk), Full mode is automatically limited to Upper body.": "Avec une pose autre que Corps entier (buste ou bureau, par exemple), le mode Complet est automatiquement limité au Haut du corps.",
+    "Keep arms in front": "Garder les bras devant",
+    "Front clearance": "Distance frontale",
+    "Face camera": "Faire face à la caméra",
+    "Avatar rotation Y (trim)": "Rotation Y de l’avatar (réglage fin)",
+    "Rotation Y (trim)": "Rotation Y (réglage fin)",
+    "Runs this action.": "Exécute cette action.",
+    "Adjusts this setting.": "Règle ce paramètre.",
+    "Opens or closes this section.": "Ouvre ou ferme cette section.",
+    "Constrains wrists and elbows to the camera-facing coronal plane and prevents head penetration using smooth 3D spatial constraints.": "Maintient poignets et coudes devant le plan du torse orienté vers la caméra et évite la pénétration de la tête grâce à des contraintes 3D progressives.",
+    "Minimum depth in front of the torso plane, expressed as a percentage of shoulder width.": "Distance minimale devant le plan du torse, exprimée en pourcentage de la largeur des épaules.",
+    "Automatically faces the active camera. Rotation Y remains available as a fine trim.": "Oriente automatiquement l’avatar vers la caméra active. La rotation Y reste disponible pour le réglage fin.",
+    "Automatically faces the remote avatar toward the active camera. Rotation Y remains a fine trim.": "Oriente automatiquement l’avatar distant vers la caméra active. La rotation Y reste un réglage fin.",
+    "Fine yaw adjustment added after Face camera alignment.": "Réglage fin du lacet appliqué après l’alignement sur la caméra."
   },
   "de": {
     "1 frame": "1 Frame",
@@ -2347,7 +2398,21 @@
     "📹 Webcam Capture": "📹 Webcam-Erfassung",
     "🖐️ Arms & Hands": "🖐️ Arme & Hände",
     "🤖 Motore Tracking (MediaPipe Tasks)": "🤖 Tracking-Engine (MediaPipe Tasks)",
-    "🤖 Tracking Engine (MediaPipe Tasks)": "🤖 Tracking-Engine (MediaPipe Tasks)"
+    "🤖 Tracking Engine (MediaPipe Tasks)": "🤖 Tracking-Engine (MediaPipe Tasks)",
+    "With non-Full Body poses (for example torso or desk), Full mode is automatically limited to Upper body.": "Bei Posen ohne Ganzkörpererfassung (z. B. Oberkörper oder Schreibtisch) wird der Modus Voll automatisch auf Oberkörper begrenzt.",
+    "Keep arms in front": "Arme vorne halten",
+    "Front clearance": "Vorderer Abstand",
+    "Face camera": "Zur Kamera ausrichten",
+    "Avatar rotation Y (trim)": "Avatar-Y-Drehung (Feinabgleich)",
+    "Rotation Y (trim)": "Y-Drehung (Feinabgleich)",
+    "Runs this action.": "Führt diese Aktion aus.",
+    "Adjusts this setting.": "Passt diese Einstellung an.",
+    "Opens or closes this section.": "Öffnet oder schließt diesen Abschnitt.",
+    "Constrains wrists and elbows to the camera-facing coronal plane and prevents head penetration using smooth 3D spatial constraints.": "Hält Handgelenke und Ellbogen vor der zur Kamera gerichteten Rumpfebene und verhindert mit weichen 3D-Grenzen ein Eindringen in den Kopf.",
+    "Minimum depth in front of the torso plane, expressed as a percentage of shoulder width.": "Mindestabstand vor der Rumpfebene, angegeben als Prozentsatz der Schulterbreite.",
+    "Automatically faces the active camera. Rotation Y remains available as a fine trim.": "Richtet den Avatar automatisch zur aktiven Kamera aus. Die Y-Drehung bleibt für den Feinabgleich verfügbar.",
+    "Automatically faces the remote avatar toward the active camera. Rotation Y remains a fine trim.": "Richtet den entfernten Avatar automatisch zur aktiven Kamera aus. Die Y-Drehung dient weiterhin dem Feinabgleich.",
+    "Fine yaw adjustment added after Face camera alignment.": "Feiner Gierwinkel-Abgleich nach der Kameraausrichtung."
   },
   "pt-BR": {
     "1 frame": "1 quadro",
@@ -2766,7 +2831,21 @@
     "📹 Webcam Capture": "📹 Captura de webcam",
     "🖐️ Arms & Hands": "🖐️ Braços e mãos",
     "🤖 Motore Tracking (MediaPipe Tasks)": "🤖 Motor de rastreamento (MediaPipe Tasks)",
-    "🤖 Tracking Engine (MediaPipe Tasks)": "🤖 Motor de rastreamento (MediaPipe Tasks)"
+    "🤖 Tracking Engine (MediaPipe Tasks)": "🤖 Motor de rastreamento (MediaPipe Tasks)",
+    "With non-Full Body poses (for example torso or desk), Full mode is automatically limited to Upper body.": "Com poses que não são de corpo inteiro (por exemplo, torso ou mesa), o modo Completo é limitado automaticamente à Parte superior do corpo.",
+    "Keep arms in front": "Manter os braços à frente",
+    "Front clearance": "Distância frontal",
+    "Face camera": "Olhar para a câmera",
+    "Avatar rotation Y (trim)": "Rotação Y do avatar (ajuste fino)",
+    "Rotation Y (trim)": "Rotação Y (ajuste fino)",
+    "Runs this action.": "Executa esta ação.",
+    "Adjusts this setting.": "Ajusta esta configuração.",
+    "Opens or closes this section.": "Abre ou fecha esta seção.",
+    "Constrains wrists and elbows to the camera-facing coronal plane and prevents head penetration using smooth 3D spatial constraints.": "Mantém pulsos e cotovelos à frente do plano do torso voltado para a câmera e evita atravessar a cabeça com restrições 3D suaves.",
+    "Minimum depth in front of the torso plane, expressed as a percentage of shoulder width.": "Distância mínima à frente do plano do torso, expressa como porcentagem da largura dos ombros.",
+    "Automatically faces the active camera. Rotation Y remains available as a fine trim.": "Orienta o avatar automaticamente para a câmera ativa. A rotação Y continua disponível para ajuste fino.",
+    "Automatically faces the remote avatar toward the active camera. Rotation Y remains a fine trim.": "Orienta o avatar remoto automaticamente para a câmera ativa. A rotação Y continua sendo um ajuste fino.",
+    "Fine yaw adjustment added after Face camera alignment.": "Ajuste fino de guinada aplicado após o alinhamento com a câmera."
   },
   "zh-CN": {
     "1 frame": "1 帧",
@@ -3180,7 +3259,21 @@
     "📹 Webcam Capture": "📹 摄像头捕获",
     "🖐️ Arms & Hands": "🖐️ 手臂与手部",
     "🤖 Motore Tracking (MediaPipe Tasks)": "🤖 动作追踪引擎 (MediaPipe Tasks)",
-    "🤖 Tracking Engine (MediaPipe Tasks)": "🤖 动作追踪引擎 (MediaPipe Tasks)"
+    "🤖 Tracking Engine (MediaPipe Tasks)": "🤖 动作追踪引擎 (MediaPipe Tasks)",
+    "With non-Full Body poses (for example torso or desk), Full mode is automatically limited to Upper body.": "使用非全身姿态（例如半身或桌面场景）时，完整模式会自动限制为上半身模式。",
+    "Keep arms in front": "保持手臂在前方",
+    "Front clearance": "前方间距",
+    "Face camera": "面向摄像机",
+    "Avatar rotation Y (trim)": "虚拟形象 Y 轴旋转（微调）",
+    "Rotation Y (trim)": "Y 轴旋转（微调）",
+    "Runs this action.": "执行此操作。",
+    "Adjusts this setting.": "调整此设置。",
+    "Opens or closes this section.": "打开或关闭此部分。",
+    "Constrains wrists and elbows to the camera-facing coronal plane and prevents head penetration using smooth 3D spatial constraints.": "将手腕和肘部保持在面向摄像机的躯干平面前方，并通过平滑的 3D 空间约束防止穿入头部。",
+    "Minimum depth in front of the torso plane, expressed as a percentage of shoulder width.": "躯干平面前方的最小距离，以肩宽百分比表示。",
+    "Automatically faces the active camera. Rotation Y remains available as a fine trim.": "自动让虚拟形象面向当前摄像机。仍可使用 Y 轴旋转进行微调。",
+    "Automatically faces the remote avatar toward the active camera. Rotation Y remains a fine trim.": "自动让远程虚拟形象面向当前摄像机。Y 轴旋转仍可用于微调。",
+    "Fine yaw adjustment added after Face camera alignment.": "在面向摄像机对齐后应用偏航微调。"
   },
   "ja": {
     "1 frame": "1フレーム",
@@ -3594,7 +3687,21 @@
     "📹 Webcam Capture": "📹 Webカメラキャプチャ",
     "🖐️ Arms & Hands": "🖐️ 腕と手",
     "🤖 Motore Tracking (MediaPipe Tasks)": "🤖 トラッキングエンジン (MediaPipe Tasks)",
-    "🤖 Tracking Engine (MediaPipe Tasks)": "🤖 トラッキングエンジン (MediaPipe Tasks)"
+    "🤖 Tracking Engine (MediaPipe Tasks)": "🤖 トラッキングエンジン (MediaPipe Tasks)",
+    "With non-Full Body poses (for example torso or desk), Full mode is automatically limited to Upper body.": "全身以外のポーズ（上半身やデスク環境など）では、フルモードは自動的に上半身へ制限されます。",
+    "Keep arms in front": "腕を前方に保つ",
+    "Front clearance": "前方の間隔",
+    "Face camera": "カメラに向ける",
+    "Avatar rotation Y (trim)": "アバターの Y 回転（微調整）",
+    "Rotation Y (trim)": "Y 回転（微調整）",
+    "Runs this action.": "この操作を実行します。",
+    "Adjusts this setting.": "この設定を調整します。",
+    "Opens or closes this section.": "このセクションを開閉します。",
+    "Constrains wrists and elbows to the camera-facing coronal plane and prevents head penetration using smooth 3D spatial constraints.": "手首と肘をカメラ側の胴体平面より前に保ち、滑らかな 3D 空間制約で頭部への貫通を防ぎます。",
+    "Minimum depth in front of the torso plane, expressed as a percentage of shoulder width.": "胴体平面より前に保つ最小距離を、肩幅に対する割合で指定します。",
+    "Automatically faces the active camera. Rotation Y remains available as a fine trim.": "アバターを現在のカメラへ自動的に向けます。Y 回転で微調整できます。",
+    "Automatically faces the remote avatar toward the active camera. Rotation Y remains a fine trim.": "リモートアバターを現在のカメラへ自動的に向けます。Y 回転は微調整として使用できます。",
+    "Fine yaw adjustment added after Face camera alignment.": "カメラ向きの位置合わせ後にヨー角を微調整します。"
   },
   "ko": {
     "1 frame": "1프레임",
@@ -4008,7 +4115,21 @@
     "📹 Webcam Capture": "📹 웹캠 캡처",
     "🖐️ Arms & Hands": "🖐️ 팔과 손",
     "🤖 Motore Tracking (MediaPipe Tasks)": "🤖 트래킹 엔진 (MediaPipe Tasks)",
-    "🤖 Tracking Engine (MediaPipe Tasks)": "🤖 트래킹 엔진 (MediaPipe Tasks)"
+    "🤖 Tracking Engine (MediaPipe Tasks)": "🤖 트래킹 엔진 (MediaPipe Tasks)",
+    "With non-Full Body poses (for example torso or desk), Full mode is automatically limited to Upper body.": "전신이 아닌 포즈(예: 상반신 또는 책상 환경)에서는 전체 모드가 자동으로 상반신 모드로 제한됩니다.",
+    "Keep arms in front": "팔을 앞쪽에 유지",
+    "Front clearance": "전방 간격",
+    "Face camera": "카메라 바라보기",
+    "Avatar rotation Y (trim)": "아바타 Y 회전(미세 조정)",
+    "Rotation Y (trim)": "Y 회전(미세 조정)",
+    "Runs this action.": "이 작업을 실행합니다.",
+    "Adjusts this setting.": "이 설정을 조정합니다.",
+    "Opens or closes this section.": "이 섹션을 열거나 닫습니다.",
+    "Constrains wrists and elbows to the camera-facing coronal plane and prevents head penetration using smooth 3D spatial constraints.": "손목과 팔꿈치를 카메라 쪽 몸통 평면 앞에 유지하고 부드러운 3D 공간 제한으로 머리 관통을 방지합니다.",
+    "Minimum depth in front of the torso plane, expressed as a percentage of shoulder width.": "몸통 평면 앞의 최소 거리를 어깨 너비의 백분율로 지정합니다.",
+    "Automatically faces the active camera. Rotation Y remains available as a fine trim.": "아바타가 현재 카메라를 자동으로 바라보게 합니다. Y 회전으로 미세 조정할 수 있습니다.",
+    "Automatically faces the remote avatar toward the active camera. Rotation Y remains a fine trim.": "원격 아바타가 현재 카메라를 자동으로 바라보게 합니다. Y 회전은 미세 조정으로 유지됩니다.",
+    "Fine yaw adjustment added after Face camera alignment.": "카메라 정렬 후 요 각도를 미세 조정합니다."
   },
   "ru": {
     "1 frame": "1 кадр",
@@ -4422,7 +4543,21 @@
     "📹 Webcam Capture": "📹 Захват с веб-камеры",
     "🖐️ Arms & Hands": "🖐️ Руки и кисти",
     "🤖 Motore Tracking (MediaPipe Tasks)": "🤖 Движок трекинга (MediaPipe Tasks)",
-    "🤖 Tracking Engine (MediaPipe Tasks)": "🤖 Движок трекинга (MediaPipe Tasks)"
+    "🤖 Tracking Engine (MediaPipe Tasks)": "🤖 Движок трекинга (MediaPipe Tasks)",
+    "With non-Full Body poses (for example torso or desk), Full mode is automatically limited to Upper body.": "Для поз не в полный рост (например, по пояс или за столом) полный режим автоматически ограничивается верхней частью тела.",
+    "Keep arms in front": "Держать руки спереди",
+    "Front clearance": "Передний зазор",
+    "Face camera": "Повернуть к камере",
+    "Avatar rotation Y (trim)": "Поворот аватара по Y (точная настройка)",
+    "Rotation Y (trim)": "Поворот по Y (точная настройка)",
+    "Runs this action.": "Выполняет это действие.",
+    "Adjusts this setting.": "Изменяет эту настройку.",
+    "Opens or closes this section.": "Открывает или закрывает этот раздел.",
+    "Constrains wrists and elbows to the camera-facing coronal plane and prevents head penetration using smooth 3D spatial constraints.": "Удерживает запястья и локти перед плоскостью корпуса, обращённой к камере, и плавно предотвращает их проникновение в голову с помощью пространственных 3D-ограничений.",
+    "Minimum depth in front of the torso plane, expressed as a percentage of shoulder width.": "Минимальное расстояние перед плоскостью корпуса в процентах от ширины плеч.",
+    "Automatically faces the active camera. Rotation Y remains available as a fine trim.": "Автоматически поворачивает аватар к активной камере. Поворот по Y остаётся доступен для точной настройки.",
+    "Automatically faces the remote avatar toward the active camera. Rotation Y remains a fine trim.": "Автоматически поворачивает удалённый аватар к активной камере. Поворот по Y используется для точной настройки.",
+    "Fine yaw adjustment added after Face camera alignment.": "Точная настройка рыскания после выравнивания по камере."
   }
 };
 
@@ -4439,21 +4574,29 @@
     return wanted === 'auto' ? systemLanguage() : wanted;
   }
 
+  function canonicalSource(source) {
+    return D.en?.[source] || source;
+  }
+
   function t(source) {
     source = String(source ?? '');
     const lang = language();
-    if (lang === 'en') {
-      return D.en?.[source] || source;
-    }
-    const direct = D[lang]?.[source];
+    const canonical = canonicalSource(source);
+    if (lang === 'en') return canonical;
+    const direct = D[lang]?.[source] || D[lang]?.[canonical];
     if (direct) return direct;
-    const cut = source.indexOf(' ');
+    // Italian is also the authored language for legacy help copy: preserve it
+    // when no explicit Italian canonical entry exists.
+    if (lang === 'it') return source;
+    const cut = canonical.indexOf(' ');
     if (cut > 0) {
-      const tail = source.slice(cut + 1);
-      const translatedTail = D[lang]?.[tail];
-      if (translatedTail) return source.slice(0, cut + 1) + translatedTail;
+      const tail = canonical.slice(cut + 1);
+      const translatedTail = D[lang]?.[tail] || D[lang]?.[D.en?.[tail]];
+      if (translatedTail) return canonical.slice(0, cut + 1) + translatedTail;
     }
-    return source;
+    // Never leak the Italian source copy into another locale. English is the
+    // canonical, complete fallback for strings that have not been localized.
+    return canonical;
   }
 
   let translating = false;
@@ -4479,11 +4622,34 @@
     if (node.textContent !== translated) node.textContent = translated;
   }
 
+  const ATTRIBUTE_NAMES = ['title', 'aria-label', 'placeholder'];
+
+  function translateAttributes(node, preserveSource = true) {
+    if (!(node instanceof Element)) return;
+    for (const name of ATTRIBUTE_NAMES) {
+      if (!node.hasAttribute(name)) continue;
+      const current = String(node.getAttribute(name) || '');
+      if (!current.trim()) continue;
+      const suffix = name.replace(/-([a-z])/g, (_, c) => c.toUpperCase());
+      const sourceKey = `xraI18n${suffix[0].toUpperCase()}${suffix.slice(1)}Source`;
+      const lastKey = `xraI18n${suffix[0].toUpperCase()}${suffix.slice(1)}Last`;
+      let source = node.dataset[sourceKey] || '';
+      const lastRendered = node.dataset[lastKey] || '';
+      if (!source || !preserveSource || (lastRendered && current !== lastRendered)) source = current;
+      node.dataset[sourceKey] = source;
+      const translated = t(source);
+      node.dataset[lastKey] = translated;
+      if (current !== translated) node.setAttribute(name, translated);
+    }
+  }
+
   function apply(root = document) {
     translating = true;
     try {
       if (root instanceof Element && root.matches(TARGET)) translateElement(root, true);
       root.querySelectorAll?.(TARGET).forEach(node => translateElement(node, true));
+      if (root instanceof Element) translateAttributes(root, true);
+      root.querySelectorAll?.('[title], [aria-label], [placeholder]').forEach(node => translateAttributes(node, true));
       document.documentElement.lang = language();
     }
     finally { translating = false; }
@@ -4509,6 +4675,8 @@
         if (node.isConnected) {
           if (node.matches && node.matches(TARGET)) translateElement(node, true);
           node.querySelectorAll?.(TARGET).forEach(el => translateElement(el, true));
+          translateAttributes(node, true);
+          node.querySelectorAll?.('[title], [aria-label], [placeholder]').forEach(el => translateAttributes(el, true));
         }
       }
     }
@@ -4533,11 +4701,19 @@
           if (node instanceof Element) queueTranslation(node);
         });
       }
+      else if (record.type === 'attributes' && record.target instanceof Element) {
+        queueTranslation(record.target);
+      }
     }
   });
 
   const startObserver = () => {
-    observer.observe(document.documentElement, { childList: true, subtree: true });
+    observer.observe(document.documentElement, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ATTRIBUTE_NAMES
+    });
     apply(document);
   };
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', startObserver, { once: true });
@@ -4545,5 +4721,5 @@
 
   events.on('profile-loaded', () => apply(document));
 
-  XRA.i18n = { LANGUAGES, language, systemLanguage, t, setLanguage, apply };
+  XRA.i18n = { LANGUAGES, language, systemLanguage, t, setLanguage, apply, dictionaries: D };
 })();

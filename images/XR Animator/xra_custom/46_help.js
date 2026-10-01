@@ -27,6 +27,8 @@
     'Body bend reduction': ['Limita la curvatura eccessiva della colonna vertebrale.', 'tiny'],
     'Preset': ['Applica un profilo rapido per le zone di collisione del corpo.', 'tiny'],
     'Mode': ['Attiva o disattiva le zone protette per evitare che le braccia compenetrino il corpo.', 'low'],
+    'Keep arms in front': ['Constrains wrists and elbows to the camera-facing coronal plane and prevents head penetration using smooth 3D spatial constraints.', 'low'],
+    'Front clearance': ['Minimum depth in front of the torso plane, expressed as a percentage of shoulder width.', 'low'],
     'Head reaction': ['Comportamento delle mani quando toccano o sfiorano la testa.', 'low'],
     'Head': ['Raggio di protezione per la testa.', 'low'],
     'Chest': ['Raggio di protezione per il busto.', 'low'],
@@ -188,7 +190,10 @@
     'Vowel expression (AA/OU/EE)': ['Intensità con cui le vocali aprono e modellano la bocca.', 'low'],
     'Recording noise gate': ['Silenzia il microfono durante le pause per eliminare ronzii, respiro o rumori della stanza.', 'low'],
     'Recording gate threshold': ['Soglia in dB per il passaggio voce. Rappresentata dalla linea arancione sul VU meter.', 'low'],
-    'Auto-calibrate gate threshold': ['Misura il rumore di fondo della stanza e imposta automaticamente la soglia ideale.', 'low']
+    'Auto-calibrate gate threshold': ['Misura il rumore di fondo della stanza e imposta automaticamente la soglia ideale.', 'low'],
+    'Face camera': ['Automatically faces the active camera. Rotation Y remains available as a fine trim.', 'none'],
+    'Avatar rotation Y (trim)': ['Fine yaw adjustment added after Face camera alignment.', 'none'],
+    'Rotation Y (trim)': ['Fine yaw adjustment added after Face camera alignment.', 'none']
   };
 
   let host = null;
@@ -250,7 +255,7 @@
 
   function attach(node, key, override = null) {
     if (!node || node.dataset.xraHelpBound) return node;
-    const data = override || entry(key);
+    const data = entry(key) || override;
     if (!data) return node;
     node.dataset.xraHelpBound = '1';
     let lastX = 0, lastY = 0;
@@ -270,6 +275,59 @@
     node.addEventListener('blur', hide, true);
     return node;
   }
+
+  const HELP_ROOTS = '.xra-right-panel, .xra-native-root, .xra-start-card';
+
+  function bindMissing(root = document) {
+    const roots = [];
+    if (root instanceof Element) {
+      const host = root.matches(HELP_ROOTS) ? root : root.closest(HELP_ROOTS);
+      if (host) roots.push(host);
+    }
+    root.querySelectorAll?.(HELP_ROOTS).forEach(node => roots.push(node));
+    for (const host of roots) {
+      host.querySelectorAll('button, input, select, textarea, summary').forEach(node => {
+        if (node.dataset.xraHelpBound || node.closest('.xra-row[data-xra-help-bound]')) return;
+        const sourceTitle = node.dataset.xraI18nTitleSource || node.title || '';
+        const sourceLabel = node.dataset.xraI18nAriaLabelSource || node.getAttribute('aria-label') || '';
+        const visible = String(node.textContent || '').trim();
+        const key = sourceLabel || visible || sourceTitle || node.name || node.id || 'Setting';
+        const fallback = sourceTitle || (node.matches('button') ? 'Runs this action.' : 'Adjusts this setting.');
+        attach(node, key, { text: fallback, impact: 'none' });
+      });
+    }
+  }
+
+  const pendingBindings = new Set();
+  let bindingQueued = false;
+
+  function queueBinding(node) {
+    if (!(node instanceof Element)) return;
+    const host = node.matches(HELP_ROOTS) ? node : node.closest(HELP_ROOTS);
+    if (!host) return;
+    pendingBindings.add(host);
+    if (bindingQueued) return;
+    bindingQueued = true;
+    queueMicrotask(() => {
+      bindingQueued = false;
+      for (const pending of pendingBindings) bindMissing(pending);
+      pendingBindings.clear();
+    });
+  }
+
+  const bindObserver = new MutationObserver(records => {
+    for (const record of records) {
+      record.addedNodes.forEach(node => {
+        queueBinding(node);
+      });
+    }
+  });
+  const startBinding = () => {
+    bindMissing(document);
+    bindObserver.observe(document.documentElement, { childList: true, subtree: true });
+  };
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', startBinding, { once: true });
+  else startBinding();
 
   XRA.help = { attach, entry, data: H, hide };
 })();
