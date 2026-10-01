@@ -1127,7 +1127,41 @@
       sub: 'Keeps forearms anchored and visible while elbows and shoulders remain still at the desk. Releases naturally when moving elbows.'
     });
 
-    // 4. Optional CPU hand-only recovery after a confirmed Holistic dropout
+    // 4. Hand stabilization (slider 0..100)
+    const handStabWrap = el('div', 'xra-stack-control');
+    const handStab = document.createElement('input');
+    handStab.type = 'range'; handStab.min = '0'; handStab.max = '100'; handStab.step = '1';
+    const handStabText = el('div', 'xra-sub');
+    handStabWrap.append(handStab, handStabText);
+    bindRefresh(() => {
+      const val = Number(nativeHands()?.stabilize_hand_percent ?? config.tracking?.stabilize_hand_percent ?? 0);
+      handStab.value = String(val);
+      handStabText.textContent = `${val}%`;
+    });
+    handStab.oninput = () => {
+      const val = Number(handStab.value);
+      handStabText.textContent = `${val}%`;
+      const h = nativeHands(); if (h) h.stabilize_hand_percent = val;
+      config.tracking ||= {}; config.tracking.stabilize_hand_percent = val;
+    };
+    handStab.onchange = async () => {
+      const val = Number(handStab.value);
+      const h = nativeHands(); if (h) h.stabilize_hand_percent = val;
+      config.tracking ||= {}; config.tracking.stabilize_hand_percent = val;
+      await XRA.profileService.save();
+      refreshAll();
+    };
+    row(box.body, 'Hand stabilization', handStabWrap, {
+      reset: async () => {
+        const val = Number(defaults.tracking?.stabilize_hand_percent ?? 0);
+        const h = nativeHands(); if (h) h.stabilize_hand_percent = val;
+        config.tracking ||= {}; config.tracking.stabilize_hand_percent = val;
+      },
+      isDefault: () => Number(nativeHands()?.stabilize_hand_percent ?? config.tracking?.stabilize_hand_percent ?? 0) === Number(defaults.tracking?.stabilize_hand_percent ?? 0),
+      sub: 'Anti-jitter stabilization filter for finger joints and palm.'
+    });
+
+    // 5. Optional CPU hand-only recovery after a confirmed Holistic dropout
     const handRecovery = document.createElement('input');
     handRecovery.type = 'checkbox';
     bindRefresh(() => {
@@ -1150,7 +1184,7 @@
       sub: 'When a wrist is lost, periodically runs a full-frame hand search instead of waiting for body tracking.'
     });
 
-    // 5. Arm stabilization (select: Off, Upper-body mocap, On)
+    // 6. Arm stabilization (select: Off, Upper-body mocap, On)
     const armStab = select([[0, 'Off'], [1, 'Upper-body mocap'], [2, 'On']]);
     bindRefresh(() => {
       const guardMode = String(config.tracking?.guard_mode || '').toLowerCase();
@@ -1184,7 +1218,7 @@
       sub: 'Stabilizes arm movement and extension based on body kinematics.'
     });
 
-    // 5. Time to stabilize (select: 0, 1 frame, 100 ms, 200 ms)
+    // 7. Time to stabilize (select: 0, 1 frame, 100 ms, 200 ms)
     const armStabTime = select([[0, '0'], [1, '1 frame'], [100, '100 ms'], [200, '200 ms']]);
     bindRefresh(() => {
       armStabTime.value = String(nativeHands()?.stabilize_arm_time ?? config.tracking?.stabilize_arm_time ?? 0);

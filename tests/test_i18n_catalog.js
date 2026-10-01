@@ -9,6 +9,7 @@ const root = path.resolve(__dirname, '..');
 const i18nPath = path.join(root, 'images/XR Animator/xra_custom/05_i18n.js');
 const uiCorePath = path.join(root, 'images/XR Animator/xra_custom/45_ui_core.js');
 const helpPath = path.join(root, 'images/XR Animator/xra_custom/46_help.js');
+const rightPanelPath = path.join(root, 'images/XR Animator/xra_custom/50_right_panel.js');
 
 const config = { ui: { language: 'en' } };
 global.window = {
@@ -37,6 +38,7 @@ vm.runInThisContext(fs.readFileSync(i18nPath, 'utf8'), { filename: i18nPath });
 const { i18n } = window.XRA;
 const languages = i18n.LANGUAGES.map(([code]) => code).filter(code => code !== 'auto');
 const newControls = [
+  'Hand stabilization',
   'Keep arms in front',
   'Front clearance',
   'Face camera',
@@ -49,6 +51,7 @@ const genericHelp = [
   'Opens or closes this section.'
 ];
 const newHelp = [
+  'Anti-jitter stabilization filter for finger joints and palm.',
   'Constrains wrists and elbows to the camera-facing coronal plane and prevents head penetration using smooth 3D spatial constraints.',
   'Minimum depth in front of the torso plane, expressed as a percentage of shoulder width.',
   'Automatically faces the active camera. Rotation Y remains available as a fine trim.',
@@ -90,5 +93,14 @@ assert.ok(uiCoreSource.includes("'Opens or closes this section.'"), 'section hel
 const helpSource = fs.readFileSync(helpPath, 'utf8');
 assert.ok(helpSource.includes('bindMissing(document)'), 'automatic help coverage is missing');
 assert.ok(helpSource.includes("host.querySelectorAll('button, input, select, textarea, summary')"), 'interactive help scan is incomplete');
+
+const rightPanelSource = fs.readFileSync(rightPanelPath, 'utf8');
+const handStabilizationBlock = rightPanelSource.match(/\/\/ 4\. Hand stabilization[\s\S]*?\/\/ 5\./)?.[0] || '';
+assert.ok(handStabilizationBlock.includes("handStab.type = 'range'"), 'hand stabilization range is missing');
+assert.ok(handStabilizationBlock.includes("handStab.min = '0'; handStab.max = '100'; handStab.step = '1'"), 'hand stabilization range is invalid');
+assert.ok(handStabilizationBlock.includes('h.stabilize_hand_percent = val'), 'hand stabilization runtime update is missing');
+assert.ok(handStabilizationBlock.includes('config.tracking.stabilize_hand_percent = val'), 'hand stabilization profile update is missing');
+assert.ok(handStabilizationBlock.includes('await XRA.profileService.save()'), 'hand stabilization persistence is missing');
+assert.ok(handStabilizationBlock.includes('defaults.tracking?.stabilize_hand_percent ?? 0'), 'hand stabilization reset is missing');
 
 console.log(`i18n catalog OK: ${languages.length} languages, ${newControls.length} new controls, complete hover fallbacks`);
