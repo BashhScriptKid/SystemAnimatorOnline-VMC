@@ -49,6 +49,14 @@ if (webkit_electron_mode) {
   SA_bridge.protocol.isRegistered("system-animator").then(function (v) { SA_protocol_registered = v })
 }
 
+var SA_linux_link_target
+if (webkit_electron_mode && linux_mode) {
+  try {
+    SA_bridge.fs.readlink(SA_require('process').env.HOME + "/Documents/system-animator").then(function (v) { SA_linux_link_target = v }).catch(function () {})
+  }
+  catch (err) {}
+}
+
 var path_demo, path_demo_by_url
 
 function SA_load_scripts() {

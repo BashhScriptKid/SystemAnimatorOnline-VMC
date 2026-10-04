@@ -1130,7 +1130,7 @@ function DragDrop_install(item) {
   SA_Reload_PRE(path, path_folder)
 }
 
-function SA_Reload_PRE(path, path_folder, restart_app) {
+async function SA_Reload_PRE(path, path_folder, restart_app) {
   var path_to_launch = (webkit_mode) ? path : path_folder
   if (use_SA_browser_mode && !is_SA_child_animation) {
     if (SA_top_window.is_SA_hosted) {
@@ -1172,8 +1172,7 @@ if (!self.oHTA) {
       restart_app = true
 
     if (WallpaperEngine_mode) {
-      const fs = SA_require('fs')
-      fs.writeFileSync(System.Gadget.path + '\\TEMP\\animation_path_default.txt', path_demo_by_url[path_to_launch]||path_to_launch)
+      await SA_bridge.fs.writeFile(System.Gadget.path + '\\TEMP\\animation_path_default.txt', path_demo_by_url[path_to_launch]||path_to_launch)
     }
 
 // a workaround for perfmon, to avoid errors on main process when reloading window to restart.

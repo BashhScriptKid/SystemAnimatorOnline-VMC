@@ -16548,8 +16548,8 @@ const items = (is_folder) ? Shell_ReturnItemsFromFolder(src, { skip_subfolder:tr
 if (is_folder) {
   let dir_path = toLocalPath(src + '/_XRA_');
   try {
-    if (!fs.existsSync(dir_path))
-      fs.mkdirSync(dir_path);
+    if (!(await SA_bridge.fs.exists(dir_path)))
+      await SA_bridge.fs.mkdir(dir_path);
   }
   catch (err) {
     running = false;
@@ -16575,7 +16575,7 @@ for (i = 0; i < i_max; i++) {
   let path_to_write;
   if (is_folder) {
     path_to_write = toLocalPath(src + '/_XRA_/xra-3d-wallpaper_' + item.path.replace(/^.+[\/\\]/, '').replace(/\.(\w+)$/, '') + '.' + converter_image_format.replace('jpeg', 'jpg'));
-    if (fs.existsSync(path_to_write)) continue;
+    if (await SA_bridge.fs.exists(path_to_write)) continue;
   }
 
   MMD_SA_options._Wallpaper3D_status2_ = 'Processing depth (image ' + (i+1) + '/' + i_max + ')';
@@ -16621,7 +16621,7 @@ for (i = 0; i < i_max; i++) {
 async (blob)=>{
   const b = Buffer.from(await blob.arrayBuffer());
   try {
-    fs.writeFileSync(path_to_write, b);
+    await SA_bridge.fs.writeFile(path_to_write, b);
   }
   catch (err) {
     console.error(err);
@@ -16685,7 +16685,7 @@ if (!src) {
   src = session.src;
 
   try {
-    if (!fs.existsSync(src))
+    if (!(await SA_bridge.fs.exists(src)))
       src = null;
   }
   catch (err) {
@@ -16750,10 +16750,10 @@ if (is_video) {
 
     let dir_path = toLocalPath(ffmpeg_path + '/TEMP');
     try {
-      if (fs.existsSync(dir_path)) {
+      if (await SA_bridge.fs.exists(dir_path)) {
         fs.rmSync(dir_path, { recursive: true, force: true });
       }
-      fs.mkdirSync(dir_path);
+      await SA_bridge.fs.mkdir(dir_path);
     }
     catch (err) {
       running = false;
@@ -16793,8 +16793,8 @@ if (result1 && is_video && !stopping) {
   const output_file = src.replace(/([^\/\\]+)\.\w+$/, 'xra-3d-wallpaper_$1.mp4');
 
   try {
-    if (fs.existsSync(output_file)) {
-      fs.unlinkSync(output_file);
+    if (await SA_bridge.fs.exists(output_file)) {
+      await SA_bridge.fs.remove(output_file);
     }
 
     let result2 = await ffmpeg(ffmpeg_path, [
