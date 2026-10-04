@@ -1,7 +1,7 @@
 <script>
   import { onMount } from 'svelte'
   import Icon from './Icon.svelte'
-  import { openPanelSection, startRecording, startTracking, stopRecording, stopTracking, t } from './xra.svelte.js'
+  import { startRecording, startTracking, stopRecording, stopTracking, t, toggleSectionPopup } from './xra.svelte.js'
 
   const X = () => window.XRA
 
@@ -92,7 +92,7 @@
 
 <nav class="xra-dock group fixed left-2 top-1/2 z-[99990] flex w-[46px] max-h-[92vh] -translate-y-1/2 flex-col gap-0.5 overflow-hidden rounded-xl border border-white/10 bg-[var(--xra-ui-bg)] p-1.5 font-sans text-[12.5px] leading-snug text-[var(--xra-ui-fg)] shadow-[0_12px_40px_rgba(0,0,0,.55)] transition-[width] duration-200 hover:w-[232px]">
   {#each SYMLINKS as s (s.id)}
-    <button type="button" class="{BTN} {HOVER}" title={t(s.label)} onclick={() => openPanelSection(s.id)}>
+    <button type="button" class="{BTN} {HOVER}" title={t(s.label)} onclick={() => toggleSectionPopup(s.id)}>
       <span class="grid w-5 shrink-0 place-items-center"><Icon name={s.icon} size={16} /></span>
       <span class={LABEL}>{t(s.label)}</span>
     </button>

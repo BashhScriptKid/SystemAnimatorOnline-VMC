@@ -1,6 +1,6 @@
 <script>
   import { untrack } from 'svelte'
-  import Control from './Control.svelte'
+  import SectionControls from './SectionControls.svelte'
   import Icon from './Icon.svelte'
   import { app, config, t, get, set } from './xra.svelte.js'
   let { section } = $props()
@@ -39,9 +39,7 @@
   </summary>
   {#if open}
     <div class="xra-sec-body">
-      {#each section.controls as c (c.path)}
-        {#if !c.when || c.when(config)}<Control control={c} />{/if}
-      {/each}
+      <SectionControls {section} />
     </div>
   {/if}
 </details>

@@ -6,6 +6,7 @@
   import QuickDock from './lib/QuickDock.svelte'
   import Icon from './lib/Icon.svelte'
   import MocapWindow from './lib/MocapWindow.svelte'
+  import SectionPopup from './lib/SectionPopup.svelte'
 
   boot()
 
@@ -18,6 +19,11 @@
 
 {#if app.ready && !app.startupOpen}
   <QuickDock />
+{/if}
+
+{#if app.ready && !app.startupOpen && app.popupSection}
+  {@const popup = sections.find((s) => s.id === app.popupSection)}
+  {#if popup}<SectionPopup section={popup} />{/if}
 {/if}
 
 {#if app.ready && !app.startupOpen && get('ui.mocap_view', 'off') !== 'off'}

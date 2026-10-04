@@ -10,14 +10,21 @@ export const app = $state({
   startupOpen: true, // Svelte-owned boot overlay (replaces legacy 60_startup)
   focusSection: null, // section id the left dock asked to reveal
   focusNonce: 0,      // bumped to re-trigger focus even for the same section
+  popupSection: null, // section id shown as a floating popup next to the dock
   status: {},      // live status pushed from the host
 })
 
-// Open the settings panel and reveal a section (used by the left quick dock).
+// Open the settings panel and reveal a section.
 export function openPanelSection(id) {
   app.panelOpen = true
   app.focusSection = id
   app.focusNonce++
+}
+
+// Toggle the floating per-category popup next to the dock (does not touch the
+// right panel).
+export function toggleSectionPopup(id) {
+  app.popupSection = app.popupSection === id ? null : id
 }
 
 export const config = $state({})
