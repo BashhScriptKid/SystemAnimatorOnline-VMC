@@ -1,7 +1,7 @@
 <script>
   import { onMount } from 'svelte'
   import Icon from './Icon.svelte'
-  import { app, config, resync, t } from './xra.svelte.js'
+  import { app, config, resync, startTracking, t } from './xra.svelte.js'
 
   const X = () => window.XRA
   const tr = (s) => t(s)
@@ -209,7 +209,7 @@
       try {
         if (typeof XRA.whenNativeReady === 'function') await XRA.whenNativeReady(15000)
         if (XRA.xraBackend?.waitUntilReady) await XRA.xraBackend.waitUntilReady(6000).catch(() => {})
-        await XRA.nativeBridge?.startNativeStreamer?.()
+        await startTracking()
       } catch (e) {
         if (!globalThis.XRA_CAMERA_OWNERSHIP?.isOwnershipError?.(e)) {
           console.warn('[XRA START]', 'Auto-starting camera on START failed', e)

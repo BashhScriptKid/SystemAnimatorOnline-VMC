@@ -82,6 +82,48 @@ export function set(path, value) {
   try { X?.profileService?.save?.() } catch (e) {}
 }
 
+function withTimeout(promise, ms, label) {
+  return new Promise((resolve, reject) => {
+    const t = setTimeout(() => reject(new Error(`${label} timed out after ${ms} ms`)), ms)
+    Promise.resolve(promise).then(
+      (v) => { clearTimeout(t); resolve(v) },
+      (e) => { clearTimeout(t); reject(e) },
+    )
+  })
+}
+
+// Hardened camera start: start, then wait for the first pose frame before
+// returning. On timeout/error the host kills the streamer and its capture
+// child. Callers keep the button disabled across this whole sequence.
+export async function startTracking({ timeout = 12000, dataTimeout = 8000 } = {}) {
+  const nb = window.XRA?.nativeBridge
+  if (!nb?.startNativeStreamer) throw new Error('native bridge unavailable')
+  try {
+    await withTimeout(nb.startNativeStreamer(), timeout, 'Camera start')
+    const deadline = performance.now() + dataTimeout
+    while (performance.now() < deadline) {
+      if (nb.cameraDataReady?.()) return true
+      await new Promise((r) => setTimeout(r, 120))
+    }
+    return true
+  } catch (e) {
+    try { await nb.forceStopCamera?.() } catch (_) {}
+    throw e
+  }
+}
+
+// Hardened stop: stop, and if it does not settle in time, force-kill.
+export async function stopTracking({ timeout = 8000 } = {}) {
+  const nb = window.XRA?.nativeBridge
+  if (!nb?.stopNativeStreamer) return
+  try {
+    await withTimeout(nb.stopNativeStreamer(), timeout, 'Camera stop')
+  } catch (e) {
+    try { await nb.forceStopCamera?.() } catch (_) {}
+    throw e
+  }
+}
+
 export function toggleClean() {
   app.cleanScreen = !app.cleanScreen
   document.body.classList.toggle('xra-total-clean-screen', app.cleanScreen)

@@ -1,7 +1,7 @@
 <script>
   import { onMount } from 'svelte'
   import Icon from './Icon.svelte'
-  import { openPanelSection, t } from './xra.svelte.js'
+  import { openPanelSection, startTracking, stopTracking, t } from './xra.svelte.js'
 
   const X = () => window.XRA
 
@@ -18,13 +18,23 @@
     try { preview = !!XRA.nativeBridge?.getPreviewVisibility?.('video') } catch (e) {}
   }
 
+  let busy = $state(false)
+
   async function toggleTracking() {
-    const nb = X().nativeBridge
+    if (busy) return
+    busy = true
+    const on = !tracking
     try {
-      if (nb.cameraRunning()) await nb.stopNativeStreamer()
-      else await nb.startNativeStreamer()
-    } catch (e) { X().toast?.('Tracking: ' + e.message, 'warn', 4000) }
-    finally { setTimeout(poll, 250) }
+      if (on) { await startTracking(); tracking = true }
+      else { await stopTracking(); tracking = false }
+    } catch (e) {
+      try { await X().nativeBridge?.forceStopCamera?.() } catch (_) {}
+      tracking = false
+      X().toast?.('Tracking: ' + e.message, 'warn', 4500)
+    } finally {
+      busy = false
+      setTimeout(poll, 250)
+    }
   }
 
   async function toggleRecording() {
@@ -83,9 +93,9 @@
 
   <div class="my-1 h-px bg-white/10"></div>
 
-  <button type="button" class="{BTN} {tracking ? 'bg-emerald-500/20' : HOVER}" title={t('Tracking')} onclick={toggleTracking}>
+  <button type="button" class="{BTN} {tracking ? 'bg-emerald-500/20' : HOVER} {busy ? 'opacity-60' : ''}" title={t('Tracking')} onclick={toggleTracking} disabled={busy}>
     <span class="grid w-5 shrink-0 place-items-center"><Icon name="Webcam" size={16} class={tracking ? 'text-emerald-400' : ''} /></span>
-    <span class={LABEL}>{tracking ? t('Tracking on') : t('Tracking off')}</span>
+    <span class={LABEL}>{busy ? t('Starting…') : (tracking ? t('Tracking on') : t('Tracking off'))}</span>
   </button>
   <button type="button" class="{BTN} {recording ? 'bg-red-500/30 text-red-200' : HOVER}" title={t('Record')} onclick={toggleRecording}>
     <span class="grid w-5 shrink-0 place-items-center"><Icon name={recording ? 'Square' : 'Circle'} size={16} class={recording ? 'text-red-400' : ''} /></span>

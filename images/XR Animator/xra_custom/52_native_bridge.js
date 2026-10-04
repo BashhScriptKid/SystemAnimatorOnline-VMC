@@ -1547,6 +1547,26 @@
     return runCameraOp('stop', () => _stopNativeStreamer());
   }
 
+  // Hard stop used when a start times out: stop the streamer AND make the
+  // Python side release/kill its capture child (ffmpeg), so a half-open camera
+  // handle cannot wedge the next attempt.
+  async function forceStopCamera() {
+    try { await stopNativeStreamer(); } catch (e) {}
+    try { await fetch('/__xra_camera/force-stop', { cache: 'no-store' }); } catch (e) {}
+  }
+
+  // "First data reply": true once the backend has delivered at least one pose
+  // frame, or the camera is otherwise running.
+  function cameraDataReady() {
+    try {
+      const engine = XRA.xraBackend;
+      const snap = engine?.snapshot?.() || {};
+      if (typeof snap.framesReceived === 'number' && snap.framesReceived > 0) return true;
+      if (engine?.lastPose) return true;
+    } catch (e) {}
+    return !!cameraRunning();
+  }
+
   async function resumeExistingCamera() {
     const tracks = cameraVideoTracks().filter(track => track?.readyState === 'live');
     if (!tracks.length) return null;
@@ -1848,6 +1868,8 @@
     restartNativeStreamer,
     startNativeStreamer,
     stopNativeStreamer,
+    forceStopCamera,
+    cameraDataReady,
     setWebcamMirror,
     applyWebcamMirror,
     setWebcamSelfie,

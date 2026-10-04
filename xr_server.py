@@ -1419,6 +1419,26 @@ class Handler(SimpleHTTPRequestHandler):
             self._serve_obs_camera_preview()
             return
 
+        # Hard stop: release the capture and kill its child (ffmpeg). Used by the
+        # UI when a camera start times out, so a half-open handle cannot wedge
+        # the next attempt.
+        if path == "/__xra_camera/force-stop":
+            try:
+                from xra_backends import capture as backend_capture
+                cap = backend_capture.CAPTURE
+                try:
+                    cap.stop()
+                except Exception:
+                    pass
+                try:
+                    cap.release()
+                except Exception:
+                    pass
+                self.send_json({"ok": True})
+            except Exception as exc:
+                self.send_json({"ok": False, "error": str(exc)}, status=500)
+            return
+
         # Toggle the browser-facing camera preview (same frames OBS consumes).
         # The capture loop only buffers frames while a preview client is
         # connected, so enabling this is free until the <img> attaches.
