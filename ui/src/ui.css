@@ -9,6 +9,18 @@
 
 #XRA_SVELTE { all: initial; }
 
+/* Shell swap: when the Svelte UI is present, retire the legacy panel,
+   drawer and launchers so there aren't two control surfaces. */
+body:has(#XRA_SVELTE) #XRA_CUSTOM_PANEL,
+body:has(#XRA_SVELTE) #XRA_NATIVE_SETTINGS,
+body:has(#XRA_SVELTE) .xra-native-launcher,
+body:has(#XRA_SVELTE) .xra-right-launcher {
+  display: none !important;
+}
+
+/* Clean/broadcast screen hides the Svelte panel too (Esc restores). */
+body.xra-total-clean-screen #XRA_SVELTE { display: none !important; }
+
 .xra-panel {
   position: fixed; top: 8px; right: 8px; z-index: 99990;
   width: 340px; max-height: calc(100vh - 16px);
