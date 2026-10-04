@@ -179,9 +179,9 @@ fd = undefined
 }
 else if (webkit_electron_mode) {
   window.confirm = function (msg) {
-    try { webkit_window.setAlwaysOnTop(false) } catch (err) {}
+    try { SA_bridge.window.setAlwaysOnTop(false) } catch (err) {}
     var confirmed = !webkit_electron_dialog.showMessageBox(null, {type:"question", buttons:["OK", "Cancel"], defaultId:1, message:msg})
-    try { webkit_window.setAlwaysOnTop(SA_topmost_window.returnBoolean("AutoItAlwaysOnTop")) } catch (err) {}
+    try { SA_bridge.window.setAlwaysOnTop(SA_topmost_window.returnBoolean("AutoItAlwaysOnTop")) } catch (err) {}
     return confirmed
   };
 
@@ -200,9 +200,9 @@ else if (webkit_electron_mode) {
 else {
   const _confirm = window.confirm;
   window.confirm = function (msg) {
-    try { webkit_window.setAlwaysOnTop(false) } catch (err) {}
+    try { SA_bridge.window.setAlwaysOnTop(false) } catch (err) {}
     var confirmed = _confirm(msg) 
-    try { webkit_window.setAlwaysOnTop(SA_topmost_window.returnBoolean("AutoItAlwaysOnTop")) } catch (err) {}
+    try { SA_bridge.window.setAlwaysOnTop(SA_topmost_window.returnBoolean("AutoItAlwaysOnTop")) } catch (err) {}
     return confirmed
   };
 }

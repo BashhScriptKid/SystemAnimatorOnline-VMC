@@ -312,7 +312,7 @@ if (is_SA_child_animation) {
 
 if (webkit_mode) {
   try {
-    webkit_window.minimize()
+    SA_bridge.window.minimize()
   }
   catch (err) {}
 }
@@ -612,14 +612,13 @@ function SA_OnDocument() {
   if (0&&webkit_electron_mode) {
 // https://github.com/electron/electron/blob/master/docs/api/dialog.md
     try {
-      webkit_window.setAlwaysOnTop(false)
+      SA_bridge.window.setAlwaysOnTop(false)
     }
     catch (err) {}
 
-    webkit_electron_dialog.showOpenDialog(null, {title:"Choose an input file."}
-,function (v) {
+    SA_bridge.dialog.open({title:"Choose an input file."}).then(function (v) {
   try {
-    webkit_window.setAlwaysOnTop(returnBoolean("AutoItAlwaysOnTop"))
+    SA_bridge.window.setAlwaysOnTop(returnBoolean("AutoItAlwaysOnTop"))
   }
   catch (err) {}
 
@@ -653,14 +652,13 @@ function SA_OnFolder(info) {
   if (webkit_electron_mode) {
 // https://github.com/electron/electron/blob/master/docs/api/dialog.md
     try {
-      webkit_window.setAlwaysOnTop(false)
+      SA_bridge.window.setAlwaysOnTop(false)
     }
     catch (err) {}
 
-    webkit_electron_dialog.showOpenDialog(null, {title:info, properties:["openDirectory"]}
-,function (v) {
+    SA_bridge.dialog.open({title:info, properties:["openDirectory"]}).then(function (v) {
   try {
-    webkit_window.setAlwaysOnTop(returnBoolean("AutoItAlwaysOnTop"))
+    SA_bridge.window.setAlwaysOnTop(returnBoolean("AutoItAlwaysOnTop"))
   }
   catch (err) {}
 
@@ -872,8 +870,8 @@ return function (event, enforced) {
       try {
         if (p_win.returnBoolean("AutoItStayOnDesktop") && !WallpaperEngine_mode)
           WebKit_object.stay_on_desktop(!p_win.webkit_IgnoreMouseEvents_disabled)
-        webkit_window.setIgnoreMouseEvents(!p_win.webkit_IgnoreMouseEvents_disabled)
-        webkit_window.setFocusable(p_win.webkit_IgnoreMouseEvents_disabled)
+        SA_bridge.window.setIgnoreMouseEvents(!p_win.webkit_IgnoreMouseEvents_disabled)
+        SA_bridge.window.setFocusable(p_win.webkit_IgnoreMouseEvents_disabled)
       }
       catch (err) {}
 
@@ -1688,7 +1686,7 @@ if (_delayed_properties) {
 
 
   if (webkit_electron_mode) {
-    setTimeout(function () { webkit_window.show() }, 1000)
+    setTimeout(function () { SA_bridge.window.show() }, 1000)
   }
 
 // not needed in Electron anymore I suppose
@@ -3103,7 +3101,7 @@ SA_topmost_window.document.body.dispatchEvent(evt)
 
   if (mouse_over_old != mouse_over_new) {
     if (IgnoreMouseEventsPartial) {
-      webkit_window.setIgnoreMouseEvents(!mouse_over_new)
+      SA_bridge.window.setIgnoreMouseEvents(!mouse_over_new)
     }
     var _body = (is_SA_child_animation) ? parent.document.getElementById("Ichild_animation" + SA_child_animation_id) : _b.body
     var opacity_new = _b.Opacity * ((mouse_over_new) ? parseFloat(opacity_on_hover || 1) : 1)

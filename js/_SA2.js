@@ -84,14 +84,14 @@ else {
 try {
   switch (type) {
     case "SHOW_GADGET":
-      webkit_window.show()
+      SA_bridge.window.show()
       System._gadget_resume()
       break
     case "HIDE_GADGET":
       if (linux_mode)
-        webkit_window.minimize()
+        SA_bridge.window.minimize()
       else
-        webkit_window.hide()
+        SA_bridge.window.hide()
       System._gadget_pause()
       break
     case "CLICK_THRU":
@@ -121,8 +121,8 @@ System.Gadget.Settings.writeString("IgnoreMouseEvents", ((IgnoreMouseEvents)?"no
 System.Gadget.Settings.writeString("IgnoreMouseEventsPartial", ((IgnoreMouseEventsPartial)?"non_default":""))
 
 try {
-  webkit_window.setIgnoreMouseEvents(IgnoreMouseEvents)
-  webkit_window.setFocusable(!IgnoreMouseEvents)
+  SA_bridge.window.setIgnoreMouseEvents(IgnoreMouseEvents)
+  SA_bridge.window.setFocusable(!IgnoreMouseEvents)
   if (type == "CLICK_THRU_PARTIAL")
     DEBUG_show("Click-thru (partial):" + ((IgnoreMouseEventsPartial)?"ON":"OFF"), 5)
   else
@@ -148,7 +148,7 @@ System.Gadget.Settings.writeString("AutoItAlwaysOnTop", ((returnBoolean("AutoItA
 
 var AutoItAlwaysOnTop = returnBoolean("AutoItAlwaysOnTop")
 try {
-  webkit_window.setAlwaysOnTop(AutoItAlwaysOnTop)
+  SA_bridge.window.setAlwaysOnTop(AutoItAlwaysOnTop)
   DEBUG_show("Always on top:" + ((AutoItAlwaysOnTop)?"ON":"OFF"), 5)
 }
 catch (err) {}
@@ -178,8 +178,8 @@ if (returnBoolean("DisableTransparency") || webkit_electron_remote.getGlobal("is
     }
     try {
       var IgnoreMouseEvents = returnBoolean("IgnoreMouseEvents")
-      webkit_window.setIgnoreMouseEvents(IgnoreMouseEvents && !WallpaperEngine_mode)
-      webkit_window.setFocusable(!IgnoreMouseEvents && !AutoItStayOnDesktop)
+      SA_bridge.window.setIgnoreMouseEvents(IgnoreMouseEvents && !WallpaperEngine_mode)
+      SA_bridge.window.setFocusable(!IgnoreMouseEvents && !AutoItStayOnDesktop)
     }
     catch (err) {}
     DEBUG_show("Stay on desktop:" + ((AutoItStayOnDesktop)?"ON":"OFF"), 5)
@@ -491,23 +491,23 @@ ipcRenderer.on('window_hidden', function (event, message) {
 });
       }
 
-webkit_electron_mode && webkit_window.setIgnoreMouseEvents(false);
+webkit_electron_mode && SA_bridge.window.setIgnoreMouseEvents(false);
 window.addEventListener("SA_resized_once", function () {
 // In Electron 2.x, window has to get the focus when .setIgnoreMouseEvents() is set to true (after resizing).
   self.focus()
   if (webkit_electron_mode) {
-    webkit_window.setIgnoreMouseEvents(IgnoreMouseEvents && !WallpaperEngine_mode)
+    SA_bridge.window.setIgnoreMouseEvents(IgnoreMouseEvents && !WallpaperEngine_mode)
     if (windows_mode || linux_mode || mac_mode) {
       let no_focus = IgnoreMouseEvents || AutoItStayOnDesktop;
-      webkit_window.setFocusable(!no_focus)
+      SA_bridge.window.setFocusable(!no_focus)
 // have to set it here AFTER focus/setFocusable in newer version of Electron
       if (!WallpaperEngine_mode && webkit_window)
-        webkit_window.setAlwaysOnTop(AutoItAlwaysOnTop)
+        SA_bridge.window.setAlwaysOnTop(AutoItAlwaysOnTop)
     }
   }
 // TEST mode for Electron
   if (WallpaperEngine_CEF_mode && webkit_electron_remote) {
-    webkit_window.setIgnoreMouseEvents(false)
+    SA_bridge.window.setIgnoreMouseEvents(false)
   }
 });
 
