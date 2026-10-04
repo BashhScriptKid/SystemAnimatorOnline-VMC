@@ -124,6 +124,37 @@ export async function stopTracking({ timeout = 8000 } = {}) {
   }
 }
 
+// Hardened recorder start: start, then wait until it reports active. On
+// timeout/error, force-stop so no half-started recorder lingers.
+export async function startRecording({ timeout = 12000, readyTimeout = 6000 } = {}) {
+  const r = window.XRA?.recorder
+  if (!r?.start) throw new Error('recorder unavailable')
+  try {
+    await withTimeout(r.start(), timeout, 'Recording start')
+    const deadline = performance.now() + readyTimeout
+    while (performance.now() < deadline) {
+      if (r.status?.()?.active) return true
+      await new Promise((res) => setTimeout(res, 120))
+    }
+    return true
+  } catch (e) {
+    try { await r.stop?.() } catch (_) {}
+    throw e
+  }
+}
+
+// Hardened recorder stop: stop, force-stopping if it does not settle in time.
+export async function stopRecording({ timeout = 8000 } = {}) {
+  const r = window.XRA?.recorder
+  if (!r?.stop) return
+  try {
+    await withTimeout(r.stop(), timeout, 'Recording stop')
+  } catch (e) {
+    try { await r.stop?.() } catch (_) {}
+    throw e
+  }
+}
+
 export function toggleClean() {
   app.cleanScreen = !app.cleanScreen
   document.body.classList.toggle('xra-total-clean-screen', app.cleanScreen)

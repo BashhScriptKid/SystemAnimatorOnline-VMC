@@ -1,7 +1,7 @@
 <script>
   import { onMount } from 'svelte'
   import Icon from './Icon.svelte'
-  import { openPanelSection, startTracking, stopTracking, t } from './xra.svelte.js'
+  import { openPanelSection, startRecording, startTracking, stopRecording, stopTracking, t } from './xra.svelte.js'
 
   const X = () => window.XRA
 
@@ -40,13 +40,25 @@
     }
   }
 
+  let recBusy = $state(false)
+  let recBusyLabel = $state('')
+
   async function toggleRecording() {
-    const r = X().recorder
+    if (recBusy) return
+    recBusy = true
+    const on = !recording
+    recBusyLabel = on ? 'Starting…' : 'Stopping…'
     try {
-      if (r.status?.().active) await r.stop()
-      else await r.start()
-    } catch (e) { X().toast?.('Recording: ' + e.message, 'warn', 4000) }
-    finally { setTimeout(poll, 250) }
+      if (on) { await startRecording(); recording = true }
+      else { await stopRecording(); recording = false }
+    } catch (e) {
+      recording = false
+      X().toast?.('Recording: ' + e.message, 'warn', 4500)
+    } finally {
+      recBusy = false
+      recBusyLabel = ''
+      setTimeout(poll, 250)
+    }
   }
 
   function togglePreview() {
@@ -100,9 +112,9 @@
     <span class="grid w-5 shrink-0 place-items-center"><Icon name="Webcam" size={16} class={tracking ? 'text-emerald-400' : ''} /></span>
     <span class={LABEL}>{busy ? t(busyLabel) : (tracking ? t('Tracking on') : t('Tracking off'))}</span>
   </button>
-  <button type="button" class="{BTN} {recording ? 'bg-red-500/30 hover:bg-red-500/40 text-red-200' : HOVER}" title={t('Record')} onclick={toggleRecording}>
-    <span class="grid w-5 shrink-0 place-items-center"><Icon name={recording ? 'Square' : 'Circle'} size={16} class={recording ? 'text-red-400' : ''} /></span>
-    <span class={LABEL}>{recording ? t('Stop recording') : t('Record')}</span>
+  <button type="button" class="{BTN} {recording ? 'bg-red-500/30 hover:bg-red-500/40 text-red-200' : HOVER} {recBusy ? 'opacity-60' : ''}" title={t('Record')} onclick={toggleRecording} disabled={recBusy}>
+    <span class="grid w-5 shrink-0 place-items-center"><Icon name={recBusy ? 'Circle' : (recording ? 'Square' : 'Circle')} size={16} class={recording ? 'text-red-400' : ''} /></span>
+    <span class={LABEL}>{recBusy ? t(recBusyLabel) : (recording ? t('Stop recording') : t('Record'))}</span>
   </button>
   <button type="button" class="{BTN} {preview ? 'bg-emerald-500/20 hover:bg-emerald-500/30' : HOVER}" title={t('Preview')} onclick={togglePreview}>
     <span class="grid w-5 shrink-0 place-items-center"><Icon name={preview ? 'Eye' : 'EyeOff'} size={16} /></span>
