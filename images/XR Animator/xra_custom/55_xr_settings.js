@@ -1595,7 +1595,7 @@
       // The drawer already has an explicit × close button. Hide the launcher
       // while open instead of showing a redundant ‹ arrow beside the panel.
       launcher.hidden = opened;
-      launcher.textContent = '⚙ IMPOSTAZIONI XRP';
+      launcher.textContent = '⚙ XR SETTINGS';
     }
     if (opened) {
       refreshAll();
@@ -1612,8 +1612,8 @@
     UI.registerHideable(root);
 
     const leftHeader = el('div', 'xra-left-header');
-    const quitBtn = button('✕ CHIUDI', 'xra-app-quit');
-    quitBtn.title = 'Chiudi applicazione';
+    const quitBtn = button('✕ CLOSE', 'xra-app-quit');
+    quitBtn.title = 'Close application';
     quitBtn.onclick = async () => {
       if (window.XRA_RECORDING_ACTIVE) {
         if (!confirm('Una registrazione è in corso. Vuoi davvero interrompere e chiudere XR Animator?')) return;
@@ -1622,13 +1622,13 @@
     };
     leftHeader.appendChild(quitBtn);
 
-    const launcher = button('⚙ IMPOSTAZIONI XRP', 'xra-native-launcher');
+    const launcher = button('⚙ XR SETTINGS', 'xra-native-launcher');
     launcher.dataset.xraNativeLauncher = '1';
     launcher.onclick = () => setOpen(!opened);
 
     drawer = el('div', 'xra-native-drawer');
     const header = el('div', 'xra-native-header');
-    header.appendChild(el('div', 'xra-native-title', '⚙ IMPOSTAZIONI XRP'));
+    header.appendChild(el('div', 'xra-native-title', '⚙ XR SETTINGS'));
     const close = button('×', 'xra-native-close');
     close.title = 'Close panel';
     close.onclick = () => setOpen(false);

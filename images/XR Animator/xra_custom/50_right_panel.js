@@ -675,13 +675,13 @@
       sub: 'Soglia in dB per il passaggio voce. Rappresentata dalla linea arancione 🟠 sul VU-meter.'
     });
 
-    const gateCalibrateBtn = button('🎚 Calibra rumore stanza (3s)');
+    const gateCalibrateBtn = button('🎚 Calibrate room noise (3s)');
     const gateCalInfo = el('div', 'xra-sub');
     bindRefresh(() => {
       const floor = Number(config.recorder?.gate_noise_floor_db);
       const thresh = Number(config.recorder?.gate_threshold_db);
       gateCalInfo.textContent = Number.isFinite(floor)
-        ? `Rumore stanza: ${floor.toFixed(1)} dB (Soglia auto: ${Number.isFinite(thresh) ? thresh.toFixed(1) : (floor + 5).toFixed(1)} dB)`
+        ? `Room noise: ${floor.toFixed(1)} dB (Auto threshold: ${Number.isFinite(thresh) ? thresh.toFixed(1) : (floor + 5).toFixed(1)} dB)`
         : 'Resta in silenzio per 3 secondi per calibrare.';
     });
     gateCalibrateBtn.onclick = async () => {
@@ -1346,7 +1346,7 @@
     const gripBox = details(box.body, '🖐️ AR Props & Calibration');
     gripBox.details.style.marginTop = '8px';
 
-    const uploadPropBtn = button('+ Importa oggetto 3D (.glb / .gltf)', 'xra-action');
+    const uploadPropBtn = button('+ Import 3D object (.glb / .gltf)', 'xra-action');
     uploadPropBtn.style.marginBottom = '12px';
     uploadPropBtn.onclick = () => {
       const input = document.createElement('input');
@@ -1573,7 +1573,7 @@
         await saveGrip();
       },
       isDefault: () => (config.object_tracking?.grip?.[propSelect.value]?.pos_x ?? 0) === 0,
-      sub: 'Trasla oggetto sull\'asse X'
+      sub: 'Translate object along X axis'
     });
     row(gripBox.body, 'Offset Y', posYWrap, {
       reset: async () => {
@@ -1584,7 +1584,7 @@
         await saveGrip();
       },
       isDefault: () => (config.object_tracking?.grip?.[propSelect.value]?.pos_y ?? 0) === 0,
-      sub: 'Trasla oggetto sull\'asse Y'
+      sub: 'Translate object along Y axis'
     });
     row(gripBox.body, 'Offset Z', posZWrap, {
       reset: async () => {
@@ -1595,7 +1595,7 @@
         await saveGrip();
       },
       isDefault: () => (config.object_tracking?.grip?.[propSelect.value]?.pos_z ?? 0) === 0,
-      sub: 'Trasla oggetto sull\'asse Z'
+      sub: 'Translate object along Z axis'
     });
     row(gripBox.body, 'Pitch (X)', rotXWrap, {
       reset: async () => {
@@ -2288,7 +2288,7 @@
           await XRA.profileService.save();
         },
         isDefault,
-        sub: `Soglia di confidenza minima (default ${Math.round(defVal * 100)}%). Valori più alti aumentano la stabilità ma richiedono migliore visibilità.`
+        sub: `Minimum confidence threshold (default ${Math.round(defVal * 100)}%). Higher values increase stability but require better visibility.`
       });
       resetBtn = r.querySelector('.xra-reset');
       return r;
@@ -2402,7 +2402,7 @@
       } else if (hwGpus.length >= 1) {
         const single = hwGpus[0];
         opts = [
-          ['default', `GPU Sistema (${single?.name || 'Standard'})`]
+          ['default', `System GPU (${single?.name || 'Standard'})`]
         ];
       } else {
         opts = [
@@ -2433,9 +2433,9 @@
       markCustomPreset();
       await XRA.profileService.save();
       refreshAll();
-      XRA.promptRestart('Il cambio di scheda video (GPU) richiede il riavvio dell\'applicazione per essere applicato dal runtime.');
+      XRA.promptRestart('Changing the graphics card (GPU) requires restarting the application to be applied by the runtime.');
     };
-    const activeGpuText = () => window.XRA_DETECTED_GPU ? `GPU attiva: ${window.XRA_DETECTED_GPU}. ` : '';
+    const activeGpuText = () => window.XRA_DETECTED_GPU ? `Active GPU: ${window.XRA_DETECTED_GPU}. ` : '';
     const gpuRow = row(secRendering.body, 'Graphics card (GPU)', gpuSelect, {
       reset: async () => {
         config.performance.gpu_preference = 'default';
@@ -3124,7 +3124,7 @@
       () => XRA.stage?.applyStageLights?.()
     );
 
-    const secAvatarPos = details(box.body, '🧍 Posizione personaggio (solo avatar)');
+    const secAvatarPos = details(box.body, '🧍 Character position (avatar only)');
 
     const makeAvatarRow = (parentNode, label, key, min, max, step, defVal, sub = '') => {
       const wrap = el('div', 'xra-stack-control');
