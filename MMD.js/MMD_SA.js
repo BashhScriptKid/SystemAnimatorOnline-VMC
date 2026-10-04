@@ -18763,9 +18763,9 @@ MMD_SA.GOML_head +=
   }
 
   if (!MMD_SA_options.width)
-    MMD_SA_options.width  = AR_para.video_width  || 512
+    MMD_SA_options.width  = ((typeof AR_para !== 'undefined') && AR_para.video_width)  || 512
   if (!MMD_SA_options.height)
-    MMD_SA_options.height = AR_para.video_height || 512
+    MMD_SA_options.height = ((typeof AR_para !== 'undefined') && AR_para.video_height) || 512
 
   if (MMD_SA_options.use_speech_bubble) {
     MMD_SA.SpeechBubble.init()
