@@ -407,7 +407,7 @@
   }
   .warn {
     margin-top: 2px; padding: 7px 9px; border-radius: 6px;
-    background: rgba(230, 80, 0, .18); border: 1px solid rgba(230, 80, 0, .45);
-    color: #ffb380; font-size: 10.5px; line-height: 1.4;
+    background: var(--xra-ui-accent3-soft); border: 1px solid rgba(255, 180, 84, .5);
+    color: var(--xra-ui-accent3); font-size: 10.5px; line-height: 1.4;
   }
 </style>
