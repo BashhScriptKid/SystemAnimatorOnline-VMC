@@ -7,21 +7,28 @@
   function win() { return (typeof webkit_window !== "undefined" && webkit_window) || null }
   function v6() { return (typeof webkit_version_milestone !== "undefined") && webkit_version_milestone && webkit_version_milestone["6.0.0"] }
 
+  function async_op(fn) {
+    return function () {
+      try { return Promise.resolve(fn.apply(null, arguments)) }
+      catch (err) { return Promise.reject(err) }
+    }
+  }
+
   var fs = {
-    exists: function (path) { return Promise.resolve(req("fs").existsSync(path)) },
-    stat: function (path) {
+    exists: async_op(function (path) { return req("fs").existsSync(path) }),
+    stat: async_op(function (path) {
       var s = req("fs").statSync(path)
-      return Promise.resolve({ isFile: s.isFile(), isDirectory: s.isDirectory(), size: s.size, mtimeMs: s.mtimeMs })
-    },
-    readDir: function (path) { return Promise.resolve(req("fs").readdirSync(path)) },
-    mkdir: function (path) { req("fs").mkdirSync(path); return Promise.resolve() },
-    remove: function (path) { req("fs").unlinkSync(path); return Promise.resolve() },
-    readFile: function (path, encoding) { return Promise.resolve(req("fs").readFileSync(path, encoding)) },
-    writeFile: function (path, data, encoding) { req("fs").writeFileSync(path, data, encoding); return Promise.resolve() },
-    appendFile: function (path, data, encoding) { req("fs").appendFileSync(path, data, encoding); return Promise.resolve() },
-    copy: function (source, dest) { req("fs-extra").copySync(source, dest); return Promise.resolve() },
-    readlink: function (path) { return Promise.resolve(req("fs").readlinkSync(path)) },
-    utimes: function (path, atime, mtime) { req("fs").utimesSync(path, atime, mtime); return Promise.resolve() }
+      return { isFile: s.isFile(), isDirectory: s.isDirectory(), size: s.size, mtimeMs: s.mtimeMs }
+    }),
+    readDir: async_op(function (path) { return req("fs").readdirSync(path) }),
+    mkdir: async_op(function (path) { req("fs").mkdirSync(path) }),
+    remove: async_op(function (path) { req("fs").unlinkSync(path) }),
+    readFile: async_op(function (path, encoding) { return req("fs").readFileSync(path, encoding) }),
+    writeFile: async_op(function (path, data, encoding) { req("fs").writeFileSync(path, data, encoding) }),
+    appendFile: async_op(function (path, data, encoding) { req("fs").appendFileSync(path, data, encoding) }),
+    copy: async_op(function (source, dest) { req("fs-extra").copySync(source, dest) }),
+    readlink: async_op(function (path) { return req("fs").readlinkSync(path) }),
+    utimes: async_op(function (path, atime, mtime) { req("fs").utimesSync(path, atime, mtime) })
   }
 
   var exec = {
