@@ -289,7 +289,7 @@
     ui: {
       visible: true,
       active_tab: 'quick',
-      language: 'auto',
+      language: 'en',
       preview_video: null,
       preview_wireframe: null,
       preview_debug: null
