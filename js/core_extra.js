@@ -42,6 +42,7 @@ if (WallpaperEngine_CEF_mode && !browser_native_mode) {
 if (webkit_mode || WallpaperEngine_CEF_mode || browser_native_mode) {
   document.write('<script src="js/SA_bridge.js"></scr'+'ipt>\n')
   document.write('<script src="js/SA_bridge_node.js"></scr'+'ipt>\n')
+  document.write('<script src="js/SA_bridge_backend.js"></scr'+'ipt>\n')
 }
 
 var SA_protocol_registered

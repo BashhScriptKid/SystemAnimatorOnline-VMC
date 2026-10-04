@@ -11,7 +11,8 @@ var SA_bridge = (function () {
     protocol: ["isRegistered", "register"],
     hash:     ["sha256"],
     image:    ["size"],
-    net:      ["wsServer", "wsClient", "wsSend", "oscSend"]
+    net:      ["wsServer", "wsClient", "wsSend", "oscSend"],
+    backend:  ["available", "status", "list", "load", "configure", "stop", "setPoseListener", "consumeLatestPose", "maybeReplaceFrame", "waitUntilConfigured", "frontendReady", "shutdown", "get"]
   }
 
   var _adapter = null
@@ -46,6 +47,12 @@ var SA_bridge = (function () {
   api.install = function (adapter, name) {
     _adapter = adapter || null
     _name = name || "(unnamed)"
+    return api
+  }
+
+  api.provide = function (group, impl) {
+    if (!_adapter) { _adapter = {}; _name = "(composed)" }
+    _adapter[group] = impl
     return api
   }
 
