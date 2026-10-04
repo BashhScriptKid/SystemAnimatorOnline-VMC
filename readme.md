@@ -1,6 +1,12 @@
-﻿# XR Animator
+﻿> **This is a fork — XR Animator VMC.** A downstream, VMC-focused repurposing of
+> [XR Animator / System Animator Online](https://github.com/ButzYung/SystemAnimatorOnline)
+> by **Butz Yung**. The upstream project remains the engine; this fork is a distribution that
+> pursues a different product direction. Upstream license and credits still apply — see
+> [About this fork](#about-this-fork) and the sections below.
 
-### Full-body, real-time motion tracking with a single webcam, on your PC and web browser
+# XR Animator VMC
+
+### Multi-platform external motion capture over the VMC protocol
 
 <p align="center">
   <img width="640" height="360" title="XR Animator" src="https://github.com/ButzYung/SystemAnimatorOnline/raw/master/images/XR_Animator_thumbnail01.png">
@@ -17,6 +23,26 @@ The web app version works on all major web browsers both on desktop and smartpho
 The Windows/Linux/macOS app version (powered by [Electron](https://www.electronjs.org/)) is also availabe for download, which provides a few extra features (e.g. VMC-protocol, transparent background) available only in a native-OS environment.
 
 ### 🖥️[XR Animator - Windows/Linux/macOS app version](https://github.com/ButzYung/SystemAnimatorOnline/releases)
+
+# About this fork
+
+**XR Animator VMC** repurposes XR Animator into a focused, multi-platform **external motion-capture transmitter**: capture on one device and drive a model on another over the **VMC protocol** (OSC/UDP), with an optional self-renderer and a clean, frameless output for OBS.
+
+- **VMC/OSC-first** — send mocap to VSeeFace / VNyan / Warudo / Unity / Unreal; receive from other sources too.
+- **Broadcast-ready by default** — a chromeless output surface, not a demo UI.
+- **Multi-platform** — desktop and mobile, with a light headless "mocap-only" mode.
+
+## Runtime & strategy (up front and honest)
+This fork currently runs on the **same runtime as upstream: Electron/Chromium**. Electron carries a real shell tax (install size, idle RAM, process count) that cannot be removed without leaving Chromium — and this engine is deeply coupled to its Chromium/`document.write` bootstrap, so a non-Chromium runtime means owning that bootstrap.
+
+The strategy is therefore deliberate:
+
+- **Downstream distribution.** This fork tracks upstream and keeps its changes **additive**, so upstream releases keep merging. Upstream is alive (solo, roughly monthly), so this is the low-maintenance path.
+- **Successor-in-waiting.** If upstream ever stops, the moving target freezes and a hard fork (including a non-Chromium runtime) becomes cheap — that's when to do it, not now.
+- **Efficiency where it counts.** The real runtime cost is mocap **inference**, not the shell. The plan is a **native inference sidecar** (MediaPipe/TFLite/ONNX) behind the existing worker boundary — cutting CPU/battery several-fold without touching the shell.
+
+## Status
+Early, work in progress. Interfaces and behavior may change.
 
 # Features
 
