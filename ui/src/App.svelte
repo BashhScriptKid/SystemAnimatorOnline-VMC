@@ -7,6 +7,7 @@
   import Icon from './lib/Icon.svelte'
   import MocapWindow from './lib/MocapWindow.svelte'
   import SectionPopup from './lib/SectionPopup.svelte'
+  import BackendPicker from './lib/BackendPicker.svelte'
 
   boot()
 
@@ -39,6 +40,7 @@
              oninput={(e) => app.search = e.currentTarget.value} />
     </div>
     <div class="xra-panel-body">
+      <BackendPicker />
       {#each sections as s (s.id)}<Section section={s} />{/each}
     </div>
   </aside>
