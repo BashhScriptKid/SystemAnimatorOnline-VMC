@@ -37,6 +37,13 @@ body.xra-total-clean-screen #XRA_SVELTE { display: none !important; }
   display: block !important;
   overflow: visible !important;
 }
+/* Real webcam frames piped from Python (MJPEG); the skeleton layer paints above. */
+.xra-mocap-cam {
+  position: absolute !important;
+  z-index: 0;
+  object-fit: contain;
+  background: #000;
+}
 
 .xra-panel {
   position: fixed; top: 8px; right: 8px; z-index: 99990;

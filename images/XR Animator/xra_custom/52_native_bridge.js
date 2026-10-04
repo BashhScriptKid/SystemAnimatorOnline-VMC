@@ -1163,6 +1163,16 @@
   // transform, so the native engine keeps drawing them and alignment is free
   // (no mirroring/repaint). The stage maps the camera region into the window.
   let mocapStage = null;
+  let mocapCamImg = null;
+  let mocapCamPreviewOn = false;
+
+  // Ask the Python server to buffer/stream the camera frames it already owns
+  // (the same frames OBS consumes). No-op until a preview client attaches.
+  async function setMocapCameraPreview(on) {
+    try {
+      await fetch('/__xra_camera/preview?on=' + (on ? 1 : 0), { cache: 'no-store' });
+    } catch (e) {}
+  }
 
   function cameraRectOrDefault() {
     const vw = window.innerWidth || 1280, vh = window.innerHeight || 720;
@@ -1187,16 +1197,37 @@
     const ox = (W - vr.w * k) / 2, oy = (H - vr.h * k) / 2;
     mocapStage.style.transformOrigin = '0 0';
     mocapStage.style.transform = `translate(${ox - vr.x * k}px, ${oy - vr.y * k}px) scale(${k})`;
+    const wantsVideo = config.ui?.mocap_view === 'both' || config.ui?.mocap_view === 'video';
+    // The browser "webcam" video is a synthetic placeholder in native mode;
+    // never show it in the window. Use the real MJPEG camera pipe instead.
     const video = webcamPreviewNode();
-    if (video) {
-      const wantsVideo = config.ui?.mocap_view === 'both' || config.ui?.mocap_view === 'video';
-      video.hidden = !wantsVideo;
-      if (wantsVideo) {
-        video.style.setProperty('position', 'absolute', 'important');
-        video.style.setProperty('left', vr.x + 'px', 'important');
-        video.style.setProperty('top', vr.y + 'px', 'important');
-        video.style.setProperty('width', vr.w + 'px', 'important');
-        video.style.setProperty('height', vr.h + 'px', 'important');
+    if (video) video.hidden = true;
+
+    if (!mocapCamImg) {
+      mocapCamImg = document.createElement('img');
+      mocapCamImg.className = 'xra-mocap-cam';
+      mocapCamImg.alt = '';
+    }
+    if (mocapCamImg.parentElement !== mocapStage) mocapStage.prepend(mocapCamImg);
+    if (wantsVideo) {
+      mocapCamImg.style.setProperty('position', 'absolute', 'important');
+      mocapCamImg.style.setProperty('left', vr.x + 'px', 'important');
+      mocapCamImg.style.setProperty('top', vr.y + 'px', 'important');
+      mocapCamImg.style.setProperty('width', vr.w + 'px', 'important');
+      mocapCamImg.style.setProperty('height', vr.h + 'px', 'important');
+      mocapCamImg.style.removeProperty('display');
+      if (!mocapCamPreviewOn) {
+        mocapCamPreviewOn = true;
+        setMocapCameraPreview(true).then(() => {
+          if (mocapCamImg) mocapCamImg.src = '/__xra_camera.mjpg?t=' + Date.now();
+        });
+      }
+    } else {
+      mocapCamImg.style.setProperty('display', 'none', 'important');
+      if (mocapCamPreviewOn) {
+        mocapCamPreviewOn = false;
+        try { mocapCamImg.src = ''; } catch (e) {}
+        setMocapCameraPreview(false);
       }
     }
   }
@@ -1225,6 +1256,12 @@
     if (video && mocapStage && video.parentElement === mocapStage) document.body.appendChild(video);
     const layerEl = document.getElementById('XRA_MOCAP_WIREFRAME_LAYER');
     if (layerEl && mocapStage && layerEl.parentElement === mocapStage) document.body.appendChild(layerEl);
+    if (mocapCamPreviewOn) {
+      mocapCamPreviewOn = false;
+      try { if (mocapCamImg) mocapCamImg.src = ''; } catch (e) {}
+      setMocapCameraPreview(false);
+    }
+    mocapCamImg = null;
     if (mocapStage) mocapStage.remove();
     mocapStage = null;
     document.body.classList.remove('xra-mocap-windowed');

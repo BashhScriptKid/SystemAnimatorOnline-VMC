@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 from pathlib import Path
-from urllib.parse import unquote, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 import json
 import threading
 import shutil
@@ -1415,8 +1415,22 @@ class Handler(SimpleHTTPRequestHandler):
     def do_GET(self):
         path = urlparse(self.path).path
 
-        if path == "/__xra_obs/camera.mjpg":
+        if path in ("/__xra_obs/camera.mjpg", "/__xra_camera.mjpg"):
             self._serve_obs_camera_preview()
+            return
+
+        # Toggle the browser-facing camera preview (same frames OBS consumes).
+        # The capture loop only buffers frames while a preview client is
+        # connected, so enabling this is free until the <img> attaches.
+        if path == "/__xra_camera/preview":
+            query = parse_qs(urlparse(self.path).query)
+            on = str((query.get("on") or ["0"])[0]).lower() in {"1", "true", "yes", "on"}
+            try:
+                from xra_backends import capture as backend_capture
+                status = backend_capture.CAPTURE.configure_obs_preview(on)
+                self.send_json({"ok": True, "preview": status})
+            except Exception as exc:
+                self.send_json({"ok": False, "error": str(exc)}, status=500)
             return
 
         # Native mocap backend: WebSocket upgrade and JSON status routes.
