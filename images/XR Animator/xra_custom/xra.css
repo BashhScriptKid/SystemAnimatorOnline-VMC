@@ -940,7 +940,17 @@ body.xra-total-clean-screen .xra-right-launcher,
 body.xra-total-clean-screen .xra-toast-host,
 body.xra-total-clean-screen .xra-native-notice-host,
 body.xra-total-clean-screen .xra-help-popup,
-body.xra-total-clean-screen #Ldungeon_UI {
+body.xra-total-clean-screen #Ldungeon_UI,
+body.xra-total-clean-screen #Lquick_menu,
+body.xra-total-clean-screen #LbuttonTL,
+body.xra-total-clean-screen #LbuttonLR,
+body.xra-total-clean-screen #LbuttonMinimize,
+body.xra-total-clean-screen #LbuttonResize,
+body.xra-total-clean-screen #LbuttonRestore,
+body.xra-total-clean-screen #LbuttonRotate,
+body.xra-total-clean-screen #LbuttonFullscreen,
+body.xra-total-clean-screen #Lnumpad,
+body.xra-total-clean-screen #Ldebug {
   display: none !important;
   visibility: hidden !important;
   pointer-events: none !important;
