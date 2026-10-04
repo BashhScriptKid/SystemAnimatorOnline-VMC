@@ -8,8 +8,17 @@ export const app = $state({
   panelOpen: true,
   settingsOpen: false,
   startupOpen: true, // Svelte-owned boot overlay (replaces legacy 60_startup)
+  focusSection: null, // section id the left dock asked to reveal
+  focusNonce: 0,      // bumped to re-trigger focus even for the same section
   status: {},      // live status pushed from the host
 })
+
+// Open the settings panel and reveal a section (used by the left quick dock).
+export function openPanelSection(id) {
+  app.panelOpen = true
+  app.focusSection = id
+  app.focusNonce++
+}
 
 export const config = $state({})
 
