@@ -13,6 +13,9 @@
 
   let stageHost = $state()
   let tracking = $state(false)
+  let fps = $state(0)
+  let lastFrames = null
+  let lastT = 0
   let timer = 0
 
   // 'auto' hides the window entirely while idle; anything else keeps it open
@@ -64,7 +67,14 @@
   })
 
   onMount(() => {
-    const poll = () => { tracking = !!X()?.nativeBridge?.cameraRunning?.() }
+    const poll = () => {
+      tracking = !!X()?.nativeBridge?.cameraRunning?.()
+      const fr = Number((X()?.xraBackend?.snapshot?.() || {}).framesReceived || 0)
+      const now = performance.now()
+      if (lastFrames != null && now > lastT) fps = Math.max(0, (fr - lastFrames) / ((now - lastT) / 1000))
+      lastFrames = fr
+      lastT = now
+    }
     poll()
     timer = setInterval(poll, 500)
     window.addEventListener('resize', update)
@@ -80,6 +90,10 @@
     <header class="flex shrink-0 cursor-move touch-none select-none items-center gap-2 px-2 py-1.5" onpointerdown={(e) => drag(e, 'move')}>
       <Icon name="Activity" size={14} />
       <span class="flex-1 text-[12px] font-semibold">{t('Mocap')}</span>
+      <span class="flex items-center gap-1 text-[10.5px] tabular-nums text-[var(--xra-ui-dim)]">
+        <span class="h-1.5 w-1.5 rounded-full" class:bg-[var(--xra-ui-accent)]={tracking} class:bg-[#565656]={!tracking}></span>
+        {tracking ? `${Math.round(fps)} fps` : 'OFF'}
+      </span>
       <select
         class="rounded-md border border-white/15 bg-[#101214] px-1.5 py-0.5 text-[11px] text-[var(--xra-ui-fg)]"
         value={get('ui.mocap_view', 'off')}

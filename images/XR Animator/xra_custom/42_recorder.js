@@ -989,6 +989,7 @@
     const badge = document.createElement('div'); badge.className = 'xra-recording-hud-badge'; badge.textContent = '● REC';
     const time = document.createElement('div'); time.className = 'xra-recording-hud-time'; time.textContent = '00:00:00';
     head.append(badge, time);
+    const chip = document.createElement('div'); chip.className = 'xra-recording-hud-chip'; chip.hidden = true;
     const info = document.createElement('div'); info.className = 'xra-recording-hud-info';
     const stopButton = document.createElement('button'); stopButton.type = 'button'; stopButton.className = 'xra-recording-hud-stop'; stopButton.textContent = '■ ' + (XRA.i18n?.t?.('STOP RECORDING') || 'STOP RECORDING');
     stopButton.onclick = async () => {
@@ -997,10 +998,19 @@
       catch (e) { XRA.toast('Recorder stop: ' + e.message, 'error', 7000); }
       finally { stopButton.disabled = false; }
     };
-    root.append(head, info, stopButton);
+    root.append(head, chip, info, stopButton);
     document.body.appendChild(root);
-    hud = { root, badge, time, info, stopButton };
+    hud = { root, badge, time, chip, info, stopButton };
     return hud;
+  }
+
+  // Compress long paths to "…/basename" for the HUD; the full path goes to the
+  // element title (hover) so the main view stays glanceable.
+  function shortPath(value) {
+    const s = String(value || '');
+    if (!s) return '';
+    const parts = s.replace(/\\/g, '/').split('/').filter(Boolean);
+    return parts.length > 1 ? '…/' + parts[parts.length - 1] : s;
   }
 
   function updateHud(state = status()) {
@@ -1027,17 +1037,24 @@
       ? tr('No audio')
       : `Audio ${(Number(c.audio_bps || 0) / 1000).toFixed(0)} kbps · ${c.audio_profile === 'call' ? tr('Call') : tr('Podcast')}${c.noise_gate && !(c.mode === 'audio' && variant === 'raw') ? ` · Gate ${Number(c.gate_threshold_db ?? -48)} dB (${state.gate_open ? 'OPEN' : 'CLOSED'})` : ''}`;
     const free = state.free_bytes == null ? '' : ` · disk ${humanBytes(state.free_bytes)} free`;
-    const raw = state.raw_path ? `\nRAW mic: ${state.raw_path}` : '';
+    const raw = state.raw_path ? `\nRAW mic: ${shortPath(state.raw_path)}` : '';
     const sourceName = nativeModeActive ? 'XR native output' : (state.capture_strategy === 'classic_v74' ? 'Classic output' : 'Clean scene');
-    const sourceLine = c.mode === 'audio' ? '' : `\nSource: ${sourceName} · ${state.source_render_width || sourceRenderWidth || '—'}×${state.source_render_height || sourceRenderHeight || '—'}${state.source_upscaled ? ' · ⚠ source below target' : ''}`;
+    const sourceLine = c.mode === 'audio' ? '' : `\nSource: ${sourceName} · ${state.source_render_width || sourceRenderWidth || '—'}×${state.source_render_height || sourceRenderHeight || '—'}`;
     const formatHead = `${String(c.output_format || 'webm').toUpperCase()} · ${c.preset || 'CUSTOM'}`;
     const progressLine = nativeModeActive && state.active
       ? `Native high-quality capture · final size on STOP${free} · 30 min ≈ ${humanBytes(estimateBytes(30))}`
       : `Written ${humanBytes(state.bytes)}${free} · 30 min ≈ ${humanBytes(estimateBytes(30))}`;
-    const targetPath = state.path || (nativeModeActive && state.active
-      ? `Target: ${(String(c.output_dir || '').trim() || '[XR Animator]/recordings')} / ${expandedFilename()}.${String(c.output_format || 'webm').toLowerCase()}`
-      : 'Preparing file…');
+    const targetPath = state.path
+      ? shortPath(state.path)
+      : (nativeModeActive && state.active
+        ? `Target: ${(String(c.output_dir || '').trim() || '[XR Animator]/recordings')} / ${expandedFilename()}.${String(c.output_format || 'webm').toLowerCase()}`
+        : 'Preparing file…');
     h.info.textContent = `${formatHead} · ${videoLine}\n${audioLine}${sourceLine}\n${progressLine}\n${targetPath}${raw}`;
+    h.info.title = [state.path, state.raw_path].filter(Boolean).join('\n');
+    // "Source below target" gets its own amber chip instead of being buried.
+    const warnSource = c.mode !== 'audio' && !!state.source_upscaled;
+    h.chip.hidden = !warnSource;
+    if (warnSource) h.chip.textContent = (XRA.i18n?.t?.('Source below target') || 'Source below target');
     h.stopButton.disabled = !!state.finalizing || !state.active;
   }
 

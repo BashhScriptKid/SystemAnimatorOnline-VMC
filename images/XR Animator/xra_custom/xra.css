@@ -1429,7 +1429,16 @@ body.xra-total-clean-screen #Ldebug {
 .xra-recording-hud-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 6px; }
 .xra-recording-hud-badge { font-weight: 900; letter-spacing: .04em; }
 .xra-recording-hud-time { font: 800 20px/1 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
-.xra-recording-hud-info { white-space: pre-wrap; overflow-wrap: anywhere; color: rgba(255,255,255,.83); font: 10px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.xra-recording-hud-chip {
+  align-self: flex-start; margin: 0 0 6px; padding: 2px 8px; border-radius: 999px;
+  background: rgba(230,192,123,.18); border: 1px solid rgba(230,192,123,.5);
+  color: #e6c07b; font: 600 10px/1.5 system-ui, sans-serif; letter-spacing: .02em;
+}
+.xra-recording-hud-info {
+  white-space: pre-wrap; overflow-wrap: anywhere; color: rgba(255,255,255,.83);
+  font: 10px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 4; overflow: hidden;
+}
 .xra-recording-hud-stop {
   width: 100%; margin-top: 8px; padding: 9px 10px; border: 0; border-radius: 7px;
   background: #a52f2f; color: #fff; font: 800 12px/1.2 system-ui, sans-serif; cursor: pointer;
