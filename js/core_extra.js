@@ -39,6 +39,11 @@ if (WallpaperEngine_CEF_mode && !browser_native_mode) {
   document.write('<script src="js/settings_WE.js"></scr'+'ipt>\n')
 }
 
+if (webkit_mode || WallpaperEngine_CEF_mode || browser_native_mode) {
+  document.write('<script src="js/SA_bridge.js"></scr'+'ipt>\n')
+  document.write('<script src="js/SA_bridge_node.js"></scr'+'ipt>\n')
+}
+
 var path_demo, path_demo_by_url
 
 function SA_load_scripts() {
