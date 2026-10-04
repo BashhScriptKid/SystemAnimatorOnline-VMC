@@ -19,11 +19,13 @@
   }
 
   let busy = $state(false)
+  let busyLabel = $state('')
 
   async function toggleTracking() {
     if (busy) return
     busy = true
     const on = !tracking
+    busyLabel = on ? 'Starting…' : 'Stopping…'
     try {
       if (on) { await startTracking(); tracking = true }
       else { await stopTracking(); tracking = false }
@@ -33,6 +35,7 @@
       X().toast?.('Tracking: ' + e.message, 'warn', 4500)
     } finally {
       busy = false
+      busyLabel = ''
       setTimeout(poll, 250)
     }
   }
@@ -93,15 +96,15 @@
 
   <div class="my-1 h-px bg-white/10"></div>
 
-  <button type="button" class="{BTN} {tracking ? 'bg-emerald-500/20' : HOVER} {busy ? 'opacity-60' : ''}" title={t('Tracking')} onclick={toggleTracking} disabled={busy}>
+  <button type="button" class="{BTN} {tracking ? 'bg-emerald-500/20 hover:bg-emerald-500/30' : HOVER} {busy ? 'opacity-60' : ''}" title={t('Tracking')} onclick={toggleTracking} disabled={busy}>
     <span class="grid w-5 shrink-0 place-items-center"><Icon name="Webcam" size={16} class={tracking ? 'text-emerald-400' : ''} /></span>
-    <span class={LABEL}>{busy ? t('Starting…') : (tracking ? t('Tracking on') : t('Tracking off'))}</span>
+    <span class={LABEL}>{busy ? t(busyLabel) : (tracking ? t('Tracking on') : t('Tracking off'))}</span>
   </button>
-  <button type="button" class="{BTN} {recording ? 'bg-red-500/30 text-red-200' : HOVER}" title={t('Record')} onclick={toggleRecording}>
+  <button type="button" class="{BTN} {recording ? 'bg-red-500/30 hover:bg-red-500/40 text-red-200' : HOVER}" title={t('Record')} onclick={toggleRecording}>
     <span class="grid w-5 shrink-0 place-items-center"><Icon name={recording ? 'Square' : 'Circle'} size={16} class={recording ? 'text-red-400' : ''} /></span>
     <span class={LABEL}>{recording ? t('Stop recording') : t('Record')}</span>
   </button>
-  <button type="button" class="{BTN} {preview ? 'bg-emerald-500/20' : HOVER}" title={t('Preview')} onclick={togglePreview}>
+  <button type="button" class="{BTN} {preview ? 'bg-emerald-500/20 hover:bg-emerald-500/30' : HOVER}" title={t('Preview')} onclick={togglePreview}>
     <span class="grid w-5 shrink-0 place-items-center"><Icon name={preview ? 'Eye' : 'EyeOff'} size={16} /></span>
     <span class={LABEL}>{preview ? t('Hide preview') : t('Show preview')}</span>
   </button>
