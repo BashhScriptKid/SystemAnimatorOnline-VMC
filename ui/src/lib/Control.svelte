@@ -18,6 +18,8 @@
     <input type="checkbox" checked={!!get(control.path)} onchange={(e) => set(control.path, e.currentTarget.checked)} />
   {:else if control.type === 'color'}
     <input type="color" value={get(control.path)} oninput={(e) => set(control.path, e.currentTarget.value)} />
+  {:else if control.type === 'number'}
+    <input type="number" step={control.step || 'any'} value={get(control.path, 0)} oninput={(e) => set(control.path, Number(e.currentTarget.value))} />
   {:else if control.type === 'text'}
     <input type="text" value={get(control.path, '')} onchange={(e) => set(control.path, e.currentTarget.value)} />
   {/if}

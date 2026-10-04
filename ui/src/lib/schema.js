@@ -1,103 +1,171 @@
-// Declarative schema for the control panel. Each control binds a config path to
-// a generic widget; labels are English keys resolved through XRA.i18n.t().
-// Types: select | slider | toggle | color | text | button
+// Data-driven panel schema.
+//
+// Coverage is *generated from the live XRA.config* so every setting appears and
+// stays in sync. OVERRIDES refine specific paths with nicer widgets (enums,
+// slider ranges, custom labels). SECTION_INFO renames/groups the top-level keys.
 
-export const SECTIONS = [
-  {
-    id: 'background', title: 'Background', icon: '🖼',
-    controls: [
-      { type: 'select', path: 'background.mode', label: 'Mode', options: [['color', 'Color'], ['image', 'Image'], ['none', 'None (transparent · OBS)']] },
-      { type: 'color', path: 'background.color', label: 'Color', when: c => c.background?.mode === 'color' },
-      { type: 'text', path: 'background.path', label: 'Image path', when: c => c.background?.mode === 'image' }
-    ]
-  },
-  {
-    id: 'avatar', title: 'Avatar position', icon: '🧍',
-    controls: [
-      { type: 'slider', path: 'avatar.offset_x', label: 'Avatar X', min: -5, max: 5, step: 0.01 },
-      { type: 'slider', path: 'avatar.offset_y', label: 'Avatar Y', min: -5, max: 5, step: 0.01 },
-      { type: 'slider', path: 'avatar.offset_z', label: 'Avatar Z', min: -5, max: 5, step: 0.01 },
-      { type: 'slider', path: 'avatar.rotation_y', label: 'Avatar rotation Y', min: -180, max: 180, step: 1 },
-      { type: 'toggle', path: 'avatar.face_camera', label: 'Face camera' }
-    ]
-  },
-  {
-    id: 'stage', title: '3D Stage & Environment', icon: '🏛️',
-    controls: [
-      { type: 'toggle', path: 'stage.enabled', label: 'Enable 3D stage' },
-      { type: 'slider', path: 'stage.scale', label: 'Stage scale', min: 0.1, max: 5, step: 0.01, when: c => c.stage?.enabled },
-      { type: 'slider', path: 'stage.rotation_x', label: 'Rotation X', min: -180, max: 180, step: 1, when: c => c.stage?.enabled },
-      { type: 'slider', path: 'stage.rotation_y', label: 'Rotation Y', min: -180, max: 180, step: 1, when: c => c.stage?.enabled },
-      { type: 'slider', path: 'stage.rotation_z', label: 'Rotation Z', min: -180, max: 180, step: 1, when: c => c.stage?.enabled },
-      { type: 'slider', path: 'stage.offset_x', label: 'Offset X', min: -10, max: 10, step: 0.05, when: c => c.stage?.enabled },
-      { type: 'slider', path: 'stage.offset_y', label: 'Offset Y', min: -10, max: 10, step: 0.05, when: c => c.stage?.enabled },
-      { type: 'slider', path: 'stage.offset_z', label: 'Offset Z', min: -10, max: 10, step: 0.05, when: c => c.stage?.enabled },
-      { type: 'slider', path: 'stage.scene_zoom', label: 'Zoom scena', min: 0.5, max: 3, step: 0.01 },
-      { type: 'toggle', path: 'stage.lights_enabled', label: 'Stage lights', when: c => c.stage?.enabled },
-      { type: 'slider', path: 'stage.lights_intensity', label: 'Stage light intensity', min: 0, max: 3, step: 0.05, when: c => c.stage?.enabled }
-    ]
-  },
-  {
-    id: 'performance', title: 'Performance', icon: '⚡',
-    controls: [
-      { type: 'select', path: 'performance.tracking_pipeline', label: 'Tracking mode', options: [['FULL_BODY', 'Full Body'], ['FACE', 'Face only'], ['UPPER_BODY', 'Upper body']] },
-      { type: 'select', path: 'performance.render_resolution', label: 'Resolution', options: [['720p', '720p (HD · GPU Saving)'], ['1080p', '1080p (Full HD · Recommended)'], ['1440p', '1440p (2K · High resolution)']] },
-      { type: 'slider', path: 'performance.render_fps', label: 'Render FPS', min: 15, max: 240, step: 1 },
-      { type: 'select', path: 'performance.gpu_preference', label: 'Graphics card (GPU)', options: [['default', 'Default'], ['high-performance', 'Dedicated GPU (High Performance)'], ['low-power', 'Integrated GPU (Low Power)']] },
-      { type: 'select', path: 'performance.shadows', label: 'Shadows', options: [['auto', 'Auto'], ['on', 'Enabled'], ['off', 'Disabled (GPU saving)']] },
-      { type: 'select', path: 'performance.antialias', label: 'Anti-Aliasing (AA)', options: [['auto', 'Enabled (Hardware MSAA · Recommended)'], ['off', 'Disabled']] },
-      { type: 'select', path: 'performance.spring_bone', label: 'Hair/cloth physics (Spring Bone)', options: [['full', 'Full (every frame)'], ['half', 'Half (1 frame out of 2 · Saving)'], ['off', 'Off']] },
-      { type: 'toggle', path: 'performance.preserve_drawing_buffer', label: 'GPU drawing buffer (preserveDrawingBuffer)' },
-      { type: 'toggle', path: 'performance.disable_postfx', label: 'Disable heavy post FX' },
-      { type: 'slider', path: 'performance.pose_fps', label: 'Pose inference', min: 5, max: 30, step: 1 },
-      { type: 'slider', path: 'performance.hand_fps', label: 'Hands inference', min: 5, max: 30, step: 1 },
-      { type: 'slider', path: 'performance.min_tracking_confidence', label: 'Min tracking confidence', min: 0.05, max: 1, step: 0.05 },
-      { type: 'slider', path: 'performance.min_pose_confidence', label: 'Min pose detection confidence', min: 0.05, max: 1, step: 0.05 },
-      { type: 'slider', path: 'performance.min_face_confidence', label: 'Min face detection confidence', min: 0.05, max: 1, step: 0.05 },
-      { type: 'slider', path: 'performance.min_joint_confidence', label: 'Min joint confidence', min: 0.05, max: 1, step: 0.05 }
-    ]
-  },
-  {
-    id: 'tracking', title: 'Tracking / mocap mode', icon: '🎯',
-    controls: [
-      { type: 'toggle', path: 'tracking.hands_enabled', label: 'Hands' },
-      { type: 'select', path: 'tracking.hand_recovery_mode', label: 'Hand recovery', options: [['normal', 'Normal'], ['aggressive', 'Aggressive'], ['off', 'Off']] },
-      { type: 'select', path: 'tracking.hand_detection_sensitivity', label: 'Hand detection sensitivity', options: [['high', 'High'], ['normal', 'Normal'], ['low', 'Low']] },
-      { type: 'slider', path: 'tracking.stabilize_hand_percent', label: 'Hand stabilization', min: 0, max: 100, step: 1 },
-      { type: 'slider', path: 'tracking.adaptive_smoothing_strength', label: 'Adaptive smoothing strength', min: 0, max: 1, step: 0.01 },
-      { type: 'toggle', path: 'tracking.desk_wrist_guard', label: 'Desk wrist occlusion guard' }
-    ]
-  },
-  {
-    id: 'lip', title: 'Audio & Lip-sync', icon: '🎙️',
-    controls: [
-      { type: 'toggle', path: 'lip.optimized', label: 'Light lip analysis' },
-      { type: 'slider', path: 'lip.analysis_fps', label: 'Analysis FPS', min: 5, max: 60, step: 1 },
-      { type: 'slider', path: 'lip.mic_mix', label: 'Mic / camera mix', min: 0, max: 1, step: 0.01 },
-      { type: 'slider', path: 'lip.threshold', label: 'Lip-sync threshold', min: 0, max: 0.2, step: 0.001 },
-      { type: 'slider', path: 'lip.response_gain', label: 'Mouth response', min: 0, max: 3, step: 0.05 },
-      { type: 'slider', path: 'lip.vowel_emphasis', label: 'Vowel emphasis', min: 0, max: 3, step: 0.05 },
-      { type: 'toggle', path: 'lip.meter_visible', label: 'Show VU meter' }
-    ]
-  },
-  {
-    id: 'recorder', title: 'Recording / capture', icon: '⏺',
-    controls: [
-      { type: 'select', path: 'recorder.mode', label: 'Recording source', options: [['video_audio', 'Video + Audio'], ['video', 'Video only'], ['audio', 'Audio only']] },
-      { type: 'select', path: 'recorder.output_format', label: 'Output format', options: [['webm', 'WebM'], ['mp4', 'MP4']] },
-      { type: 'slider', path: 'recorder.width', label: 'Width', min: 320, max: 3840, step: 2 },
-      { type: 'slider', path: 'recorder.height', label: 'Height', min: 240, max: 2160, step: 2 },
-      { type: 'slider', path: 'recorder.fps', label: 'Capture FPS', min: 15, max: 60, step: 1 },
-      { type: 'toggle', path: 'recorder.noise_gate', label: 'Recording noise gate' },
-      { type: 'slider', path: 'recorder.gate_threshold_db', label: 'Recording gate threshold', min: -80, max: -5, step: 0.5 },
-      { type: 'slider', path: 'recorder.video_bps', label: 'Video bitrate', min: 500000, max: 20000000, step: 100000 },
-      { type: 'toggle', path: 'recorder.raw_audio_backup', label: 'RAW microphone backup' }
-    ]
-  },
-  {
-    id: 'ui', title: 'UI & overlays', icon: '🖥️',
-    controls: [
-      { type: 'select', path: 'ui.language', label: 'Language', options: () => (window.XRA?.i18n?.LANGUAGES || [['en', 'English']]) }
-    ]
+export const SECTION_INFO = {
+  camera: { title: 'Camera', icon: '📷' },
+  devices: { title: 'Devices', icon: '🎛' },
+  pose_model: { title: 'Pose model', icon: '🕺' },
+  performance: { title: 'Performance', icon: '⚡' },
+  tracking: { title: 'Motion capture', icon: '🧍' },
+  body: { title: 'Body', icon: '🧍' },
+  collider: { title: 'Body collider', icon: '🛡' },
+  lip: { title: 'Audio & Lip-sync', icon: '🎙️' },
+  background: { title: 'Background', icon: '🖼' },
+  avatar: { title: 'Character position (avatar only)', icon: '🧍' },
+  second_avatar: { title: 'Remote avatar (Studio Link)', icon: '🌐' },
+  stage: { title: '3D Stage & Environment', icon: '🏛️' },
+  recorder: { title: 'Recording / capture', icon: '⏺' },
+  visual_effects: { title: 'Visual effects', icon: '✨' },
+  debug: { title: 'Diagnostics', icon: '📊' },
+  ui: { title: 'UI & overlays', icon: '🖥' }
+}
+
+// Sections rendered in this order; anything else follows alphabetically.
+export const SECTION_ORDER = ['performance', 'tracking', 'body', 'collider', 'lip', 'background', 'stage', 'avatar', 'second_avatar', 'recorder', 'visual_effects', 'debug', 'ui', 'camera', 'devices', 'pose_model']
+
+export const SKIP_SECTIONS = new Set(['left_settings', '_custom_', '_excluded_'])
+export const SKIP_PATHS = new Set(['camera.view_presets', 'camera.selected_view_preset', 'ui.preview_video', 'ui.preview_wireframe', 'ui.preview_debug', 'performance.auto_last_result', 'recorder.output_dir'])
+
+function humanize(s) {
+  const words = String(s).replace(/_/g, ' ').replace(/([a-z])([A-Z])/g, '$1 $2').trim()
+  return words.charAt(0).toUpperCase() + words.slice(1)
+}
+
+// path -> control overrides
+export const OVERRIDES = {
+  'ui.language': { type: 'select', options: () => (window.XRA?.i18n?.LANGUAGES || [['en', 'English']]) },
+  'background.mode': { type: 'select', options: [['color', 'Color'], ['image', 'Image'], ['none', 'None (transparent · OBS)']] },
+  'background.color': { type: 'color' },
+  'background.path': { type: 'text' },
+
+  'performance.tracking_pipeline': { type: 'select', label: 'Tracking mode', options: [['FULL_BODY', 'Full Body'], ['FACE', 'Face only'], ['UPPER_BODY', 'Upper body']] },
+  'performance.render_resolution': { type: 'select', options: [['720p', '720p (HD · GPU Saving)'], ['1080p', '1080p (Full HD · Recommended)'], ['1440p', '1440p (2K · High resolution)']] },
+  'performance.render_fps': { type: 'slider', min: 15, max: 240, step: 1 },
+  'performance.gpu_preference': { type: 'select', label: 'Graphics card (GPU)', options: [['default', 'Default'], ['high-performance', 'Dedicated GPU (High Performance)'], ['low-power', 'Integrated GPU (Low Power)']] },
+  'performance.shadows': { type: 'select', options: [['auto', 'Auto'], ['on', 'Enabled'], ['off', 'Disabled (GPU saving)']] },
+  'performance.antialias': { type: 'select', label: 'Anti-Aliasing (AA)', options: [['auto', 'Enabled (Hardware MSAA · Recommended)'], ['off', 'Disabled']] },
+  'performance.spring_bone': { type: 'select', label: 'Hair/cloth physics (Spring Bone)', options: [['full', 'Full (every frame)'], ['half', 'Half (1 frame out of 2 · Saving)'], ['off', 'Off']] },
+  'performance.infer_mode': { type: 'select', options: [['native', 'Native (Auto)'], ['640x360', '640×360 (Recommended · 30 FPS smooth)'], ['640x480', '640×480 (Standard 4:3 format)'], ['1280x720', '1280×720 (HD 720p · High precision)']] },
+  'performance.pose_fps': { type: 'slider', min: 5, max: 30, step: 1 },
+  'performance.hand_fps': { type: 'slider', min: 5, max: 30, step: 1 },
+  'performance.min_tracking_confidence': { type: 'slider', min: 0.05, max: 1, step: 0.05 },
+  'performance.min_pose_confidence': { type: 'slider', min: 0.05, max: 1, step: 0.05 },
+  'performance.min_face_confidence': { type: 'slider', min: 0.05, max: 1, step: 0.05 },
+  'performance.min_joint_confidence': { type: 'slider', min: 0.05, max: 1, step: 0.05 },
+
+  'tracking.hand_recovery_mode': { type: 'select', options: [['normal', 'Normal'], ['aggressive', 'Aggressive'], ['off', 'Off']] },
+  'tracking.hand_detection_sensitivity': { type: 'select', options: [['high', 'High'], ['normal', 'Normal'], ['low', 'Low']] },
+  'tracking.stabilize_hand_percent': { type: 'slider', min: 0, max: 100, step: 1 },
+  'tracking.stabilize_arm': { type: 'slider', min: 0, max: 100, step: 1 },
+  'tracking.stabilize_arm_time': { type: 'slider', min: 0, max: 2, step: 0.05 },
+  'tracking.native_smoothing': { type: 'slider', min: 0, max: 1, step: 0.01 },
+  'tracking.body_bend_reduction': { type: 'slider', min: 0, max: 1, step: 0.01 },
+  'tracking.upper_body_guard_strength': { type: 'slider', min: 0, max: 1, step: 0.01 },
+  'tracking.guard_jump_deg': { type: 'slider', min: 5, max: 120, step: 1 },
+  'tracking.guard_hold_ms': { type: 'slider', min: 0, max: 2000, step: 10 },
+  'tracking.guard_reacquire_deg': { type: 'slider', min: 5, max: 120, step: 1 },
+  'tracking.adaptive_smoothing_strength': { type: 'slider', min: 0, max: 1, step: 0.01 },
+  'tracking.guard_confidence_min': { type: 'slider', min: 0, max: 1, step: 0.01 },
+  'tracking.guard_release_ms': { type: 'slider', min: 0, max: 2000, step: 10 },
+  'tracking.guard_mode': { type: 'select', options: [['off', 'Off'], ['auto', 'Auto']] },
+  'tracking.desk_torso_lock': { type: 'slider', min: 0, max: 1, step: 0.01 },
+  'tracking.desk_hips_lock': { type: 'slider', min: 0, max: 1, step: 0.01 },
+  'tracking.desk_legs_lock': { type: 'slider', min: 0, max: 1, step: 0.01 },
+  'tracking.desk_max_yaw_deg': { type: 'slider', min: 0, max: 90, step: 1 },
+  'tracking.desk_max_pitch_deg': { type: 'slider', min: 0, max: 90, step: 1 },
+  'tracking.desk_max_roll_deg': { type: 'slider', min: 0, max: 90, step: 1 },
+
+  'body.anchor_strength': { type: 'slider', min: 0, max: 1, step: 0.01 },
+  'body.transition_ms': { type: 'slider', min: 0, max: 2000, step: 10 },
+
+  'avatar.offset_x': { type: 'slider', min: -5, max: 5, step: 0.01 },
+  'avatar.offset_y': { type: 'slider', min: -5, max: 5, step: 0.01 },
+  'avatar.offset_z': { type: 'slider', min: -5, max: 5, step: 0.01 },
+  'avatar.rotation_y': { type: 'slider', min: -180, max: 180, step: 1 },
+  'second_avatar.offset_x': { type: 'slider', min: -20, max: 20, step: 0.1 },
+  'second_avatar.offset_y': { type: 'slider', min: -10, max: 10, step: 0.1 },
+  'second_avatar.offset_z': { type: 'slider', min: -10, max: 10, step: 0.1 },
+  'second_avatar.rotation_y': { type: 'slider', min: -180, max: 180, step: 1 },
+
+  'stage.scale': { type: 'slider', min: 0.1, max: 5, step: 0.01 },
+  'stage.rotation_x': { type: 'slider', min: -180, max: 180, step: 1 },
+  'stage.rotation_y': { type: 'slider', min: -180, max: 180, step: 1 },
+  'stage.rotation_z': { type: 'slider', min: -180, max: 180, step: 1 },
+  'stage.offset_x': { type: 'slider', min: -10, max: 10, step: 0.05 },
+  'stage.offset_y': { type: 'slider', min: -10, max: 10, step: 0.05 },
+  'stage.offset_z': { type: 'slider', min: -10, max: 10, step: 0.05 },
+  'stage.scene_zoom': { type: 'slider', min: 0.5, max: 3, step: 0.01 },
+  'stage.lights_intensity': { type: 'slider', min: 0, max: 3, step: 0.05 },
+
+  'collider.preset': { type: 'select', options: [['CUSTOM', 'Custom'], ['NONE', 'None']] },
+  'collider.reaction': { type: 'select', options: [['z_push', 'Z push'], ['bounce', 'Bounce'], ['block', 'Block']] },
+  'collider.head': { type: 'slider', min: 0, max: 200, step: 1 },
+  'collider.chest': { type: 'slider', min: 0, max: 200, step: 1 },
+  'collider.waist': { type: 'slider', min: 0, max: 200, step: 1 },
+  'collider.hip': { type: 'slider', min: 0, max: 200, step: 1 },
+  'collider.front_clearance': { type: 'slider', min: 0, max: 50, step: 1 },
+
+  'lip.analysis_fps': { type: 'slider', min: 5, max: 60, step: 1 },
+  'lip.fft_size': { type: 'select', label: 'FFT size', options: [['256', '256'], ['512', '512'], ['1024', '1024'], ['2048', '2048']] },
+  'lip.mic_mix': { type: 'slider', min: 0, max: 1, step: 0.01 },
+  'lip.threshold': { type: 'slider', min: 0, max: 0.2, step: 0.001 },
+  'lip.response_gain': { type: 'slider', min: 0, max: 3, step: 0.05 },
+  'lip.vowel_emphasis': { type: 'slider', min: 0, max: 3, step: 0.05 },
+
+  'recorder.mode': { type: 'select', label: 'Recording source', options: [['video_audio', 'Video + Audio'], ['video', 'Video only'], ['audio', 'Audio only']] },
+  'recorder.audio_only_variant': { type: 'select', label: 'Audio only mode', options: [['both', 'Processed + RAW'], ['processed', 'Processed'], ['raw', 'RAW']] },
+  'recorder.capture_source': { type: 'select', label: 'Output source', options: [['classic_v74', 'Classic output · recommended'], ['clean_scene', 'Clean scene output · experimental (no UI)'], ['native_xr', 'XR native video only · fallback']] },
+  'recorder.output_format': { type: 'select', options: [['webm', 'WebM'], ['mp4', 'MP4']] },
+  'recorder.audio_profile': { type: 'select', options: [['podcast', 'Podcast'], ['call', 'Call (Browser echo/noise filters)']] },
+  'recorder.hardware_encode': { type: 'select', options: [['auto', 'Auto'], ['on', 'On'], ['off', 'Off (CPU)']] },
+  'recorder.width': { type: 'slider', min: 320, max: 3840, step: 2 },
+  'recorder.height': { type: 'slider', min: 240, max: 2160, step: 2 },
+  'recorder.fps': { type: 'slider', min: 15, max: 60, step: 1 },
+  'recorder.gate_threshold_db': { type: 'slider', min: -80, max: -5, step: 0.5 },
+  'recorder.gate_hold_ms': { type: 'slider', min: 0, max: 1000, step: 10 },
+  'recorder.gate_release_ms': { type: 'slider', min: 0, max: 1000, step: 10 },
+  'recorder.video_bps': { type: 'slider', min: 500000, max: 20000000, step: 100000 },
+  'recorder.audio_bps': { type: 'slider', min: 32000, max: 320000, step: 8000 },
+  'recorder.segment_minutes': { type: 'select', options: [['0', 'Off'], ['30', 'Every 30 min'], ['60', 'Every 60 min']] },
+  'recorder.raw_audio_format': { type: 'select', options: [['flac', 'FLAC (lossless)'], ['wav', 'WAV (large)']] },
+  'recorder.filename': { type: 'text' },
+
+  'camera.optimized': { type: 'toggle' },
+  'camera.width': { type: 'slider', min: 160, max: 1920, step: 2 },
+  'camera.height': { type: 'slider', min: 120, max: 1080, step: 2 },
+  'camera.fps': { type: 'slider', min: 5, max: 60, step: 1 }
+}
+
+// Fields that are objects/arrays and must not be rendered as a scalar control.
+function isScalar(v) { return v === null || ['string', 'number', 'boolean'].includes(typeof v) }
+
+export function buildSections(config) {
+  const sections = []
+  for (const [key, value] of Object.entries(config || {})) {
+    if (SKIP_SECTIONS.has(key)) continue
+    if (!value || typeof value !== 'object' || Array.isArray(value)) continue
+    const info = SECTION_INFO[key] || {}
+    const controls = []
+    for (const [field, def] of Object.entries(value)) {
+      const path = `${key}.${field}`
+      if (SKIP_PATHS.has(path)) continue
+      const ov = OVERRIDES[path] || {}
+      if (ov.hidden) continue
+      if (def !== null && typeof def === 'object') {
+        // one level of nesting (e.g. camera.view_presets is skipped, others flatten)
+        continue
+      }
+      const type = ov.type || (typeof def === 'boolean' ? 'toggle' : typeof def === 'number' ? 'number' : 'text')
+      controls.push({ type, path, label: ov.label || humanize(field), min: ov.min, max: ov.max, step: ov.step, options: ov.options })
+    }
+    if (controls.length) sections.push({ id: key, title: info.title || humanize(key), icon: info.icon || '⚙', controls })
   }
-]
+  sections.sort((a, b) => {
+    const ia = SECTION_ORDER.indexOf(a.id), ib = SECTION_ORDER.indexOf(b.id)
+    return (ia < 0 ? 999 : ia) - (ib < 0 ? 999 : ib)
+  })
+  return sections
+}

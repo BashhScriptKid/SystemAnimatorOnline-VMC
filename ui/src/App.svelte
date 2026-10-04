@@ -1,9 +1,11 @@
 <script>
-  import { app, boot, toggleClean, refreshStatus } from './lib/xra.svelte.js'
-  import { SECTIONS } from './lib/schema.js'
+  import { app, config, boot, toggleClean, refreshStatus } from './lib/xra.svelte.js'
+  import { buildSections } from './lib/schema.js'
   import Section from './lib/Section.svelte'
 
   boot()
+
+  const sections = $derived(buildSections(config))
 </script>
 
 {#if app.ready && app.panelOpen}
@@ -15,7 +17,7 @@
       <button title="Close panel" onclick={() => app.panelOpen = false}>✕</button>
     </header>
     <div class="xra-panel-body">
-      {#each SECTIONS as s (s.id)}<Section section={s} />{/each}
+      {#each sections as s (s.id)}<Section section={s} />{/each}
     </div>
   </aside>
 {:else if app.ready}
