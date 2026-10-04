@@ -57,7 +57,8 @@
             stdout: cp.stdout,
             stderr: cp.stderr,
             kill: function (signal) { return cp.kill(signal) },
-            onExit: function (cb) { cp.on("exit", cb); return cp }
+            onExit: function (cb) { cp.on("exit", cb); return cp },
+            onClose: function (cb) { cp.on("close", cb); return cp }
           })
         }
         catch (e) { reject(e) }

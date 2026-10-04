@@ -16498,7 +16498,6 @@ return new Promise((resolve)=>{
       let stage;
       let resolve_paused;
 
-      let fs, spawn, execSync;
       let cp;
       let resolve_cp;
 
@@ -16508,14 +16507,14 @@ return new Promise((resolve)=>{
 return new Promise((resolve)=>{
   resolve_cp = resolve;
 
-  try {
-    cp = spawn(
-      toLocalPath(path + '/ffmpeg'),//(linux_mode) ? toLocalPath(path + '/ffmpeg') : 'ffmpeg',
-      args,
-      {
-        cwd: path
-      }
-    );
+  SA_bridge.exec.spawn(
+    toLocalPath(path + '/ffmpeg'),//(linux_mode) ? toLocalPath(path + '/ffmpeg') : 'ffmpeg',
+    args,
+    {
+      cwd: path
+    }
+  ).then((proc)=>{
+    cp = proc;
 
     const log = [];
     cp.stderr.on('data', (data) => {
@@ -16526,19 +16525,18 @@ return new Promise((resolve)=>{
       }
     });
 
-    cp.on('close', (code) => {
+    cp.onClose((code) => {
       if (code) {
         console.error('FFMPEG decoding failed', log);
       }
       cp = resolve_cp = undefined;
       resolve(!code);
     });
-  }
-  catch (err) {
+  }).catch((err)=>{
     console.error(err);
     cp = resolve_cp = undefined;
     resolve(false);
-  }
+  });
 });
       }
 
@@ -16665,19 +16663,6 @@ stage = -1;
 
 resolve_paused = null;
 
-if (webkit_electron_mode && !fs) {
-  try {
-    fs = SA_require('fs');
-    ({ spawn, execSync } = SA_require('child_process'));
-  }
-  catch (err) {
-    running = false;
-    MMD_SA_options._Wallpaper3D_status2_ = '❌ERROR: Failed to initialize';
-    console.error(err);
-    return;
-  }
-}
-
 let is_video;
 let session, session_to_save;
 if (!src) {
@@ -16737,7 +16722,7 @@ if (is_video) {
           await SA_bridge.fs.access(ffmpeg, "execute");
         }
         catch (err) {
-          execSync('chmod +x "' + ffmpeg + '"');
+          await SA_bridge.exec.run('chmod +x "' + ffmpeg + '"');
         }
       }
       catch (err) {
