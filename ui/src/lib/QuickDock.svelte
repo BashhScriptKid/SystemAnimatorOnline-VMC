@@ -7,7 +7,6 @@
 
   let tracking = $state(false)
   let recording = $state(false)
-  let preview = $state(false)
   let timer = 0
 
   function poll() {
@@ -15,7 +14,6 @@
     if (!XRA) return
     try { tracking = !!XRA.nativeBridge?.cameraRunning?.() } catch (e) {}
     try { recording = !!XRA.recorder?.status?.()?.active } catch (e) {}
-    try { preview = !!XRA.nativeBridge?.getPreviewVisibility?.('video') } catch (e) {}
   }
 
   let busy = $state(false)
@@ -59,12 +57,6 @@
       recBusyLabel = ''
       setTimeout(poll, 250)
     }
-  }
-
-  function togglePreview() {
-    const next = !preview
-    try { X().nativeBridge?.setPreviewVisibility?.('video', next) } catch (e) {}
-    preview = next
   }
 
   async function pickVrm() {
@@ -115,10 +107,6 @@
   <button type="button" class="{BTN} {recording ? 'bg-red-500/30 hover:bg-red-500/40 text-red-200' : HOVER} {recBusy ? 'opacity-60' : ''}" title={t('Record')} onclick={toggleRecording} disabled={recBusy}>
     <span class="grid w-5 shrink-0 place-items-center"><Icon name={recBusy ? 'Circle' : (recording ? 'Square' : 'Circle')} size={16} class={recording ? 'text-red-400' : ''} /></span>
     <span class={LABEL}>{recBusy ? t(recBusyLabel) : (recording ? t('Stop recording') : t('Record'))}</span>
-  </button>
-  <button type="button" class="{BTN} {preview ? 'bg-emerald-500/20 hover:bg-emerald-500/30' : HOVER}" title={t('Preview')} onclick={togglePreview}>
-    <span class="grid w-5 shrink-0 place-items-center"><Icon name={preview ? 'Eye' : 'EyeOff'} size={16} /></span>
-    <span class={LABEL}>{preview ? t('Hide preview') : t('Show preview')}</span>
   </button>
   <button type="button" class="{BTN} {HOVER}" title={t('Load / change VRM…')} onclick={pickVrm}>
     <span class="grid w-5 shrink-0 place-items-center"><Icon name="FolderOpen" size={16} /></span>
