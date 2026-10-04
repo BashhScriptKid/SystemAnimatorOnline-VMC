@@ -347,7 +347,7 @@
     overflow: hidden;
     border: 1px solid rgba(255, 255, 255, .12);
     border-radius: 12px;
-    background: rgba(20, 22, 24, .97);
+    background: #1e1e1e;
     box-shadow: 0 14px 48px rgba(0, 0, 0, .65);
     backdrop-filter: blur(10px);
   }
@@ -368,7 +368,7 @@
   .log {
     flex: 1 1 auto; min-height: 150px; max-height: 300px; overflow: auto;
     margin: 0 0 10px; padding: 10px 12px;
-    background: rgba(0, 0, 0, .35);
+    background: var(--xra-ui-well);
     border: 1px solid rgba(255, 255, 255, .07); border-radius: 8px;
     color: #8fd6c0; font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
     white-space: pre-wrap;
@@ -387,7 +387,7 @@
   .q {
     display: flex; align-items: center; gap: 8px; width: 100%;
     padding: 8px 10px; cursor: pointer;
-    background: rgba(255, 255, 255, .06); color: #e8eaed;
+    background: rgba(255, 255, 255, .06); color: var(--xra-ui-fg);
     border: 1px solid rgba(255, 255, 255, .12); border-radius: 7px;
     font: inherit; text-align: left;
   }
@@ -402,7 +402,7 @@
   .field { display: grid; gap: 4px; }
   .field > span { color: #9aa3ad; font-size: 10px; }
   select {
-    width: 100%; padding: 7px; background: #101214; color: #e8eaed;
+    width: 100%; padding: 7px; background: var(--xra-ui-well); color: var(--xra-ui-fg);
     border: 1px solid rgba(255, 255, 255, .12); border-radius: 6px;
   }
   .warn {
