@@ -1102,16 +1102,43 @@
   // Apply the wireframe visibility to the native node and the XRA mocap layer.
   // The layer's canvases are created asynchronously after MMDStarted, so this
   // is invoked on tracking/MMD/profile events to re-assert the state.
+  // When the movable mocap window owns the view, the on-stage layer/native
+  // preview stand down and the window mirrors them instead.
+  function mocapWindowActive() {
+    const v = config.ui?.mocap_view;
+    return v === 'both' || v === 'wireframe' || v === 'video';
+  }
+
   function applyMocapWireframeVisibility() {
-    const show = wireframeShouldShow();
+    const windowed = mocapWindowActive();
+    const show = !windowed && wireframeShouldShow();
     setPreviewVisibility('wireframe', show, { remember: false });
     // The layer's canvas is reparented/created late; gate it with body classes
     // (see xra.css) so it can never flash before the first apply.
-    document.body?.classList.toggle('xra-tracking-on', !!cameraRunning());
-    document.body?.classList.toggle('xra-wireframe-off', config.ui?.preview_wireframe === false);
+    document.body?.classList.toggle('xra-tracking-on', !windowed && !!cameraRunning());
+    document.body?.classList.toggle('xra-wireframe-off', windowed || config.ui?.preview_wireframe === false);
+    if (windowed) {
+      // Keep a hidden live stream available for the window to mirror.
+      if (config.ui?.mocap_view === 'both' || config.ui?.mocap_view === 'video') {
+        try { bindWebcamPreviewStream(); } catch (e) {}
+      }
+      const video = webcamPreviewNode();
+      if (video) video.hidden = true;
+    } else {
+      try { setWebcamPreviewVisible(config.ui?.preview_video === true); } catch (e) {}
+    }
     return show;
   }
   XRA.applyMocapWireframeVisibility = applyMocapWireframeVisibility;
+
+  // Live DOM sources the mocap window mirrors.
+  function getMocapSources() {
+    return {
+      mode: config.ui?.mocap_view || 'off',
+      video: webcamPreviewNode(),
+      canvases: overlayCanvasCandidates('wireframe')
+    };
+  }
 
   function setNativeMocapDebug(visible, { forceRefresh = false } = {}) {
     const ml = window.MMD_SA_options?.user_camera?.ML_models;
@@ -1654,6 +1681,7 @@
     applyWebcamSelfie,
     cameraRunning,
     getPreviewVisibility,
+    getMocapSources,
     setPreviewVisibility,
     restorePreviewVisibility,
     applyCameraConstraintsSafe,

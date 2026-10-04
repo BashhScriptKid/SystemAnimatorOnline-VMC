@@ -292,7 +292,10 @@
       language: 'en',
       preview_video: null,
       preview_wireframe: null,
-      preview_debug: null
+      preview_debug: null,
+      // Movable/resizable mocap window. mocap_view: off | both | wireframe | video.
+      mocap_view: 'off',
+      mocap_window: { x: 48, y: 96, w: 360, h: 270 }
     }
   };
 

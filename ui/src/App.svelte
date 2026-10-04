@@ -1,10 +1,11 @@
 <script>
-  import { app, config, boot, toggleClean, refreshStatus } from './lib/xra.svelte.js'
+  import { app, config, boot, get, toggleClean, refreshStatus } from './lib/xra.svelte.js'
   import { buildSections } from './lib/schema.js'
   import Section from './lib/Section.svelte'
   import Startup from './lib/Startup.svelte'
   import QuickDock from './lib/QuickDock.svelte'
   import Icon from './lib/Icon.svelte'
+  import MocapWindow from './lib/MocapWindow.svelte'
 
   boot()
 
@@ -17,6 +18,10 @@
 
 {#if app.ready && !app.startupOpen}
   <QuickDock />
+{/if}
+
+{#if app.ready && !app.startupOpen && get('ui.mocap_view', 'off') !== 'off'}
+  <MocapWindow />
 {/if}
 
 {#if app.ready && !app.startupOpen && app.panelOpen}

@@ -42,6 +42,7 @@ export const OVERRIDES = {
   'background.path': { type: 'text' },
 
   'ui.preview_wireframe': { type: 'tristate', label: 'Mocap wireframe' },
+  'ui.mocap_view': { type: 'select', label: 'Mocap window', options: [['off', 'Off'], ['both', 'Webcam + skeleton'], ['wireframe', 'Skeleton only'], ['video', 'Webcam only']] },
 
   'performance.tracking_pipeline': { type: 'select', label: 'Tracking mode', options: [['FULL_BODY', 'Full Body'], ['FACE', 'Face only'], ['UPPER_BODY', 'Upper body']] },
   'performance.render_resolution': { type: 'select', options: [['720p', '720p (HD · GPU Saving)'], ['1080p', '1080p (Full HD · Recommended)'], ['1440p', '1440p (2K · High resolution)']] },

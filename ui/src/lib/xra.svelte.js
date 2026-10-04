@@ -49,6 +49,11 @@ function applyHook(path) {
     if (typeof X.applyMocapWireframeVisibility === 'function') X.applyMocapWireframeVisibility()
     return
   }
+  if (path === 'ui.mocap_view') {
+    // The window takes over the mocap view (or hands it back to the stage).
+    if (typeof X.applyMocapWireframeVisibility === 'function') X.applyMocapWireframeVisibility()
+    return
+  }
   if (path.startsWith('performance.')) {
     window.XRA_render_fps_limit = Number(config.performance.render_fps ?? 60)
     window.XRA_gpu_preference = String(config.performance.gpu_preference || 'default')
