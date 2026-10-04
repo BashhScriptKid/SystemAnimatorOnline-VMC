@@ -2814,7 +2814,7 @@
       if (box.details.open && !backgroundsLoaded) refreshBackgrounds();
     });
 
-    const mode = select([['color', 'Color'], ['image', 'Image']]);
+    const mode = select([['color', 'Color'], ['image', 'Image'], ['none', 'None (transparent · OBS)']]);
     bindRefresh(() => { mode.value = config.background.mode || 'color'; });
     mode.onchange = async () => {
       config.background.mode = mode.value;

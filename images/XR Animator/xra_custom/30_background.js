@@ -29,6 +29,15 @@
         if (window.LdesktopBG_host) LdesktopBG_host.style.display = 'block';
         try { window.wallpaper_src = bg.path; } catch (e) {}
       }
+      else if (bg.mode === 'none') {
+        // Transparent output (e.g. OBS Browser Source / overlay): hide any backdrop
+        // so only the alpha:true 3D canvas (the avatar) is composited.
+        try { window.wallpaper_src = null; } catch (e) {}
+        if (window.LdesktopBG) LdesktopBG.style.backgroundImage = 'none';
+        if (window.LdesktopBG_host) LdesktopBG_host.style.display = 'none';
+        document.body.style.backgroundColor = 'transparent';
+        document.documentElement.style.backgroundColor = 'transparent';
+      }
       else {
         try { window.wallpaper_src = null; } catch (e) {}
         if (window.LdesktopBG) LdesktopBG.style.backgroundImage = 'none';
