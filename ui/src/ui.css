@@ -28,6 +28,16 @@ body:has(#XRA_SVELTE) .xra-right-launcher {
 /* Clean/broadcast screen hides the Svelte panel too (Esc restores). */
 body.xra-total-clean-screen #XRA_SVELTE { display: none !important; }
 
+/* Mocap window: a viewport-sized scaler that hosts the REAL native layers
+   (reparented by the host), scaled into the window by one transform. */
+.xra-mocap-stage { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
+.xra-mocap-stage #XRA_MOCAP_WIREFRAME_LAYER {
+  position: absolute !important;
+  inset: 0 !important;
+  display: block !important;
+  overflow: visible !important;
+}
+
 .xra-panel {
   position: fixed; top: 8px; right: 8px; z-index: 99990;
   width: 340px; max-height: calc(100vh - 16px);

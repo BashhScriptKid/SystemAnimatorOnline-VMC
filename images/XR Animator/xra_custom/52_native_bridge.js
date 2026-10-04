@@ -1118,12 +1118,10 @@
     document.body?.classList.remove('xra-tracking-on');
     document.body?.classList.add('xra-wireframe-off');
     if (windowed) {
-      // Keep a hidden live stream available for the window to mirror.
       if (config.ui?.mocap_view === 'both' || config.ui?.mocap_view === 'video') {
         try { bindWebcamPreviewStream(); } catch (e) {}
       }
-      const video = webcamPreviewNode();
-      if (video) video.hidden = true;
+      updateMocapWindow();
     } else {
       try { setWebcamPreviewVisible(config.ui?.preview_video === true); } catch (e) {}
     }
@@ -1156,6 +1154,80 @@
       cameraRect: nodeRect(videoCanvas),
       canvases: canvases.map(node => ({ node, rect: nodeRect(node) })).filter(c => c.rect)
     };
+  }
+
+  // The mocap window reparents the REAL native layers (webcam video + the
+  // wireframe canvas layer) into a viewport-sized stage and applies one CSS
+  // transform, so the native engine keeps drawing them and alignment is free
+  // (no mirroring/repaint). The stage maps the camera region into the window.
+  let mocapStage = null;
+
+  function cameraRectOrDefault() {
+    const vw = window.innerWidth || 1280, vh = window.innerHeight || 720;
+    const cam = window.System?._browser?.camera;
+    return nodeRect(cam?.video_canvas) || {
+      x: Math.max(0, (vw - vh * 16 / 9) / 2),
+      y: 0,
+      w: Math.min(vw, vh * 16 / 9),
+      h: vh
+    };
+  }
+
+  function updateMocapWindow() {
+    if (!mocapStage || !mocapStage.parentElement) return;
+    const host = mocapStage.parentElement;
+    const vw = window.innerWidth || 1280, vh = window.innerHeight || 720;
+    mocapStage.style.width = vw + 'px';
+    mocapStage.style.height = vh + 'px';
+    const vr = cameraRectOrDefault();
+    const W = host.clientWidth || 1, H = host.clientHeight || 1;
+    const k = Math.min(W / vr.w, H / vr.h) || 1;
+    const ox = (W - vr.w * k) / 2, oy = (H - vr.h * k) / 2;
+    mocapStage.style.transformOrigin = '0 0';
+    mocapStage.style.transform = `translate(${ox - vr.x * k}px, ${oy - vr.y * k}px) scale(${k})`;
+    const video = webcamPreviewNode();
+    if (video) {
+      const wantsVideo = config.ui?.mocap_view === 'both' || config.ui?.mocap_view === 'video';
+      video.hidden = !wantsVideo;
+      if (wantsVideo) {
+        video.style.setProperty('position', 'absolute', 'important');
+        video.style.setProperty('left', vr.x + 'px', 'important');
+        video.style.setProperty('top', vr.y + 'px', 'important');
+        video.style.setProperty('width', vr.w + 'px', 'important');
+        video.style.setProperty('height', vr.h + 'px', 'important');
+      }
+    }
+  }
+
+  function attachMocapWindow(container) {
+    if (!(container instanceof HTMLElement)) return;
+    if (!mocapStage) {
+      mocapStage = document.createElement('div');
+      mocapStage.className = 'xra-mocap-stage';
+    }
+    if (mocapStage.parentElement !== container) container.appendChild(mocapStage);
+    if (config.ui?.mocap_view === 'both' || config.ui?.mocap_view === 'video') {
+      try { bindWebcamPreviewStream(); } catch (e) {}
+    }
+    try { XRA.ensureMocapWireframeLayer?.(); } catch (e) {}
+    const layerEl = document.getElementById('XRA_MOCAP_WIREFRAME_LAYER');
+    if (layerEl && layerEl.parentElement !== mocapStage) mocapStage.appendChild(layerEl);
+    const video = webcamPreviewNode();
+    if (video && video.parentElement !== mocapStage) mocapStage.appendChild(video);
+    document.body.classList.add('xra-mocap-windowed');
+    updateMocapWindow();
+  }
+
+  function detachMocapWindow() {
+    const video = webcamPreviewNode();
+    if (video && mocapStage && video.parentElement === mocapStage) document.body.appendChild(video);
+    const layerEl = document.getElementById('XRA_MOCAP_WIREFRAME_LAYER');
+    if (layerEl && mocapStage && layerEl.parentElement === mocapStage) document.body.appendChild(layerEl);
+    if (mocapStage) mocapStage.remove();
+    mocapStage = null;
+    document.body.classList.remove('xra-mocap-windowed');
+    try { video && (video.style.position = ''); } catch (e) {}
+    applyMocapWireframeVisibility();
   }
 
   function setNativeMocapDebug(visible, { forceRefresh = false } = {}) {
@@ -1700,6 +1772,9 @@
     cameraRunning,
     getPreviewVisibility,
     getMocapSources,
+    attachMocapWindow,
+    detachMocapWindow,
+    updateMocapWindow,
     setPreviewVisibility,
     restorePreviewVisibility,
     applyCameraConstraintsSafe,
