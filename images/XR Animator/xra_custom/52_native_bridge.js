@@ -1197,6 +1197,19 @@
     const ox = (W - vr.w * k) / 2, oy = (H - vr.h * k) / 2;
     mocapStage.style.transformOrigin = '0 0';
     mocapStage.style.transform = `translate(${ox - vr.x * k}px, ${oy - vr.y * k}px) scale(${k})`;
+    // Align the skeleton canvases to the camera rect so they overlay the webcam
+    // and map through the SAME transform as the camera image. Without this the
+    // canvases keep their own native rect (often a different corner/scale) and
+    // the camera-rect transform throws them outside the window.
+    for (const node of overlayCanvasCandidates('wireframe')) {
+      if (!(node instanceof HTMLElement)) continue;
+      node.style.setProperty('position', 'absolute', 'important');
+      node.style.setProperty('left', vr.x + 'px', 'important');
+      node.style.setProperty('top', vr.y + 'px', 'important');
+      node.style.setProperty('width', vr.w + 'px', 'important');
+      node.style.setProperty('height', vr.h + 'px', 'important');
+    }
+
     const wantsVideo = config.ui?.mocap_view === 'both' || config.ui?.mocap_view === 'video';
     // The browser "webcam" video is a synthetic placeholder in native mode;
     // never show it in the window. Use the real MJPEG camera pipe instead.
