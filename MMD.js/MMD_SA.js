@@ -16734,7 +16734,7 @@ if (is_video) {
       try {
         const ffmpeg = toLocalPath(ffmpeg_path + '/ffmpeg');
         try {
-          fs.accessSync(ffmpeg, fs.constants.X_OK);
+          await SA_bridge.fs.access(ffmpeg, "execute");
         }
         catch (err) {
           execSync('chmod +x "' + ffmpeg + '"');
@@ -16751,7 +16751,7 @@ if (is_video) {
     let dir_path = toLocalPath(ffmpeg_path + '/TEMP');
     try {
       if (await SA_bridge.fs.exists(dir_path)) {
-        fs.rmSync(dir_path, { recursive: true, force: true });
+        await SA_bridge.fs.rm(dir_path, { recursive: true, force: true });
       }
       await SA_bridge.fs.mkdir(dir_path);
     }

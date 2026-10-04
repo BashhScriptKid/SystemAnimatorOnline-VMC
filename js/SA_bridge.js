@@ -1,6 +1,6 @@
 var SA_bridge = (function () {
   var SPEC = {
-    fs:       ["exists", "stat", "readDir", "mkdir", "remove", "readFile", "writeFile", "appendFile", "copy", "readlink", "utimes"],
+    fs:       ["exists", "stat", "readDir", "mkdir", "remove", "readFile", "writeFile", "appendFile", "copy", "readlink", "utimes", "access", "rm"],
     exec:     ["run", "spawn"],
     env:      ["home", "platform", "versions", "argv", "get"],
     window:   ["setSize", "setPosition", "setTransparent", "setIgnoreMouseEvents", "setAlwaysOnTop", "setFocusable", "hide", "show", "minimize", "reload", "close", "captureFrame"],

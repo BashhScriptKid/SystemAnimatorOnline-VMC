@@ -28,7 +28,13 @@
     appendFile: async_op(function (path, data, encoding) { req("fs").appendFileSync(path, data, encoding) }),
     copy: async_op(function (source, dest) { req("fs-extra").copySync(source, dest) }),
     readlink: async_op(function (path) { return req("fs").readlinkSync(path) }),
-    utimes: async_op(function (path, atime, mtime) { req("fs").utimesSync(path, atime, mtime) })
+    utimes: async_op(function (path, atime, mtime) { req("fs").utimesSync(path, atime, mtime) }),
+    access: async_op(function (path, mode) {
+      var C = req("fs").constants
+      var mask = (mode === "read") ? C.R_OK : (mode === "write") ? C.W_OK : (mode === "execute") ? C.X_OK : C.F_OK
+      req("fs").accessSync(path, mask)
+    }),
+    rm: async_op(function (path, options) { req("fs").rmSync(path, options || {}) })
   }
 
   var exec = {
