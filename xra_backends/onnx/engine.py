@@ -26,6 +26,7 @@ from .face_mesh import FaceMesh
 from .hands import HandLandmark, PalmDetection
 from .person_det import MPPersonDet
 from .pose import MPPose
+from .hand_tracker import HandTracker
 
 _MODEL_FILES = {
     "person": "person_detection_mediapipe_2023mar.onnx",
@@ -109,6 +110,8 @@ class OnnxHolisticEngine:
         self._providers = providers
         self._person = self._pose = self._blazeface = self._facemesh = None
         self._palm = self._hand = None
+        self._tracker = None
+        self._tracker_wh = None
         self.ready = False
         self.last_error = ""
         self.task_timings_ms: dict = {}
@@ -165,15 +168,16 @@ class OnnxHolisticEngine:
         kp = [{"position": {"x": 0.0, "y": 0.0, "z": 0.0}, "score": 0.0, "part": ""}
               for _ in range(33)]
         world = []
+        wrists = {}
         for i, name in enumerate(_BLAZEPOSE_NAMES):
             kp[i]["part"] = _camel(name)
         try:
             persons = self._person.infer(frame_bgr)
             if len(persons) == 0:
-                return kp, world
+                return kp, world, wrists
             res = self._pose.infer(frame_bgr, persons[0])
             if not res:
-                return kp, world
+                return kp, world, wrists
             _bbox, lms, lms_world, _mask, _heat, _conf = res
             for i in range(33):
                 x, y, z, vis, pres = (float(v) for v in lms[i][:5])
@@ -182,9 +186,13 @@ class OnnxHolisticEngine:
             world = [{"x": round(float(p[0]), 4), "y": round(float(p[1]), 4),
                       "z": round(float(p[2]), 4), "name": _BLAZEPOSE_NAMES[i]}
                      for i, p in enumerate(lms_world[:33])]
+            # BlazePose wrists (15/16) seed the hand ROI when detection misses.
+            for idx, side in ((15, "left"), (16, "right")):
+                if float(lms[idx][3]) > 0.1:
+                    wrists[side] = (float(lms[idx][0]), float(lms[idx][1]))
         except Exception:
             pass
-        return kp, world
+        return kp, world, wrists
 
     def _face(self, frame_bgr):
         try:
@@ -199,23 +207,19 @@ class OnnxHolisticEngine:
         except Exception:
             return [], _blendshapes_from_face([])
 
-    def _hands(self, frame_bgr):
+    def _hands(self, frame_bgr, pose_wrists, h, w):
         left, right, lw, rw = [], [], [], []
         try:
-            palms = self._palm.detect(frame_bgr, 0.5)
-            if len(palms) == 0:
-                return left, right, lw, rw
-            lms, world, presence, handed = self._hand.predict(frame_bgr, palms)
-            for i in range(len(lms)):
-                pts = [{"x": round(float(x), 2), "y": round(float(y), 2),
-                        "z": round(float(z), 2), "score": round(float(presence[i]), 3)}
-                       for x, y, z in lms[i]]
-                wr = [[round(float(x), 4), round(float(y), 4), round(float(z), 4)]
-                      for x, y, z in world[i]]
-                if float(handed[i]) >= 0.5:
-                    left, lw = pts, wr
-                else:
-                    right, rw = pts, wr
+            if self._tracker is None or self._tracker_wh != (w, h):
+                self._tracker = HandTracker(self._palm, self._hand, (w, h))
+                self._tracker_wh = (w, h)
+            lres, rres = self._tracker.process(frame_bgr, pose_wrists)
+            if lres:
+                left = lres.get("points") or []
+                lw = lres.get("world") or []
+            if rres:
+                right = rres.get("points") or []
+                rw = rres.get("world") or []
         except Exception:
             pass
         return left, right, lw, rw
@@ -226,9 +230,9 @@ class OnnxHolisticEngine:
         t0 = time.perf_counter()
         with self._lock:
             h, w = frame_bgr.shape[:2]
-            kp, world = self._pose_kp(frame_bgr, h, w)
+            kp, world, wrists = self._pose_kp(frame_bgr, h, w)
             face_pts, blendshapes = self._face(frame_bgr)
-            left, right, lw, rw = self._hands(frame_bgr)
+            left, right, lw, rw = self._hands(frame_bgr, wrists, h, w)
 
         out = {
             "score": 1.0,
