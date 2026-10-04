@@ -8,7 +8,7 @@
   const PRESETS = ['AUTO', 'ECO', 'LOW', 'BALANCED', 'QUALITY', 'HIGH', 'MAX', 'CUSTOM']
 
   // Persist without blocking the UI. save() can stall when the host-side write
-  // path is busy (e.g. backend reconfigure), so the overlay must never await it.
+  // path is busy (e.g. backend reconfigure), so the splash must never await it.
   function persist() {
     try { X()?.profileService?.save?.(0) } catch (e) {}
   }
@@ -28,27 +28,40 @@
   let cameraRunning = $state(false)
   let cameraStateText = $state('')
   let warning = $state('')
-  let startLabel = $state('Loading avatar…')
-  let startDisabled = $state(true)
+  let ready = $state(false)
   let busy = $state(false)
   let presetBusy = $state(false)
   let camBusy = $state(false)
 
-  let closing = $state(false)
+  let closing = false
+  let interacted = false
+  let autoDismissAt = 0
   let timer = 0
   let offs = []
+
+  function dismiss() {
+    if (closing) return
+    closing = true
+    if (timer) { clearInterval(timer); timer = 0 }
+    persist()
+    app.startupOpen = false
+    X()?.ui?.refresh?.()
+  }
+
+  async function startAndClose() {
+    busy = true
+    try { await startTracking() }
+    catch (e) { X().toast?.('Tracking: ' + e.message, 'warn', 4500) }
+    finally { busy = false; dismiss() }
+  }
 
   async function startWithPreset(name) {
     const XRA = X()
     name = String(name || 'CUSTOM').toUpperCase()
-
     if (name === 'CUSTOM') {
       XRA.config.performance.master_preset = 'CUSTOM'
-      persist()
-      status = 'CUSTOM · ready'
-      return
+      persist(); status = 'CUSTOM · ready'; return
     }
-
     if (name === 'AUTO') {
       status = 'Benchmarking…'
       const result = await XRA.performance.benchmarkHardwareOnly()
@@ -56,10 +69,8 @@
       await XRA.performance.applyPresetSafe(result.preset)
       XRA.config.performance.master_preset = 'AUTO'
       XRA.config.performance.auto_last_result = result
-      persist()
-      return
+      persist(); return
     }
-
     status = `${name}: applying…`
     await XRA.performance.applyPresetSafe(name)
     status = `${name} · applied`
@@ -154,18 +165,21 @@
     return !!be.snapshot?.()?.ready
   }
 
+  // Informational only — the splash no longer gates on readiness.
   function updateReadiness() {
-    if (closing || !app.startupOpen) return
+    if (closing) return
     const info = getCameraBusyInfo()
     warning = info.busy
       ? `Webcam in use by another application (${info.proc}). Close it to start tracking.`
       : ''
+    ready = isAvatarReady() && isBackendReady()
+    if (ready && !interacted && !autoDismissAt) autoDismissAt = Date.now() + 2000
+    else if (!ready) autoDismissAt = 0
+  }
 
-    if (!isAvatarReady()) { startDisabled = true; startLabel = tr('Loading avatar…') }
-    else if (!isBackendReady()) { startDisabled = true; startLabel = tr('Connecting to backend…') }
-    else if (info.busy) { startDisabled = true; startLabel = tr('Camera busy…') }
-    else if (busy) { startDisabled = true }
-    else { startDisabled = false; startLabel = 'START' }
+  function tick() {
+    updateReadiness()
+    if (autoDismissAt && !interacted && !busy && Date.now() >= autoDismissAt) dismiss()
   }
 
   async function onPresetChange(event) {
@@ -195,30 +209,6 @@
     catch (e) { X().toast('VRM loader: ' + e.message, 'error', 4500) }
   }
 
-  async function closeOverlay(autoStartCamera = false) {
-    if (closing || startDisabled) return
-    closing = true
-    if (timer) { clearInterval(timer); timer = 0 }
-    busy = true
-    startLabel = 'Starting…'
-    const XRA = X()
-    persist()
-    app.startupOpen = false
-    XRA.ui?.refresh?.()
-    if (autoStartCamera) {
-      try {
-        if (typeof XRA.whenNativeReady === 'function') await XRA.whenNativeReady(15000)
-        if (XRA.xraBackend?.waitUntilReady) await XRA.xraBackend.waitUntilReady(6000).catch(() => {})
-        await startTracking()
-      } catch (e) {
-        if (!globalThis.XRA_CAMERA_OWNERSHIP?.isOwnershipError?.(e)) {
-          console.warn('[XRA START]', 'Auto-starting camera on START failed', e)
-          XRA.toast?.('Starting camera: ' + e.message, 'warn', 5000)
-        }
-      }
-    }
-  }
-
   onMount(() => {
     const XRA = X()
     status = tr('Ready.')
@@ -228,20 +218,14 @@
       : (XRA?.config?.performance?.master_preset || 'CUSTOM'))
     bgText = XRA?.config?.background?.path || XRA?.config?.background?.color || 'default'
 
-    try {
-      const bStatus = window.SA_bridge?.backend?.status?.()
-      const cam = window.System?._browser?.camera
-      if (bStatus?.backend?.capture?.running && !cam?.running) {
-        window.SA_bridge.backend?.stop?.().catch(() => {})
-      }
-    } catch (_) {}
-
     renderCameraState()
     setTimeout(() => refreshCameras(false), 100)
 
-    timer = setInterval(updateReadiness, 300)
+    timer = setInterval(tick, 300)
     window.addEventListener('MMDStarted', updateReadiness)
     if (XRA.xraBackend?.onStatus) XRA.xraBackend.onStatus(updateReadiness)
+    const onKey = (e) => { if (e.key === 'Escape') dismiss() }
+    window.addEventListener('keydown', onKey, true)
     updateReadiness()
 
     XRA.whenNativeReady?.()?.then(() => { if (app.startupOpen) refreshCameras(false) })
@@ -255,31 +239,36 @@
     return () => {
       if (timer) clearInterval(timer)
       window.removeEventListener('MMDStarted', updateReadiness)
+      window.removeEventListener('keydown', onKey, true)
       for (const off of offs) { try { off() } catch (e) {} }
       offs = []
     }
   })
 </script>
 
-<div class="xra-startup">
-  <div class="card">
+<!-- Blender-style splash: dismiss on click-outside / Esc, or automatically a
+     beat after the scene is ready. It never starts the camera. -->
+<div class="xra-startup" onclick={dismiss}>
+  <div class="card" role="dialog" aria-label="XR Animator VMC" onclick={(e) => e.stopPropagation()}
+       onpointerdown={(e) => e.stopPropagation()} onpointerenter={() => { interacted = true }}>
     <div class="head">
       <div>
-        <h2>XR Animator</h2>
+        <h2>XR Animator <span class="brand-tag">VMC</span></h2>
         <div class="sub">{tr('Quick setup · changes apply immediately.')}</div>
       </div>
+      <button type="button" class="close" title={tr('Close')} aria-label={tr('Close')} onclick={dismiss}><Icon name="X" size={15} /></button>
     </div>
 
     <div class="grid">
       <label class="field">
         <div class="sub">Language</div>
-        <select value={language} onchange={onLanguageChange} disabled={closing}>
+        <select value={language} onchange={onLanguageChange} disabled={busy}>
           {#each languageOptions as [code, label] (code)}<option value={code}>{label}</option>{/each}
         </select>
       </label>
       <label class="field">
         <div class="sub">Master preset</div>
-        <select value={preset} onchange={onPresetChange} disabled={presetBusy || closing}>
+        <select value={preset} onchange={onPresetChange} disabled={presetBusy || busy}>
           {#each PRESETS as name (name)}<option value={name}>{name}</option>{/each}
         </select>
       </label>
@@ -293,7 +282,7 @@
         <div class="camera-state" class:on={cameraRunning}>{cameraStateText}</div>
       </div>
       <div class="camera-row">
-        <select value={cameraValue} onchange={onCameraChange} disabled={camBusy}>
+        <select value={cameraValue} onchange={onCameraChange} disabled={camBusy || busy}>
           {#if !camerasReady}
             <option value="">{tr('Loading cameras…')}</option>
           {:else if !cameras.length}
@@ -302,7 +291,7 @@
             {#each cameras as c (c.deviceId)}<option value={c.deviceId}>{c.label}</option>{/each}
           {/if}
         </select>
-        <button type="button" class="action" title={tr('Refresh cameras')} aria-label={tr('Refresh cameras')} onclick={() => refreshCameras(true)} disabled={camBusy}><Icon name="RefreshCw" size={14} /></button>
+        <button type="button" class="action" title={tr('Refresh cameras')} aria-label={tr('Refresh cameras')} onclick={() => refreshCameras(true)} disabled={camBusy || busy}><Icon name="RefreshCw" size={14} /></button>
       </div>
       {#if warning}<div class="warn">{warning}</div>{/if}
     </section>
@@ -311,11 +300,14 @@
 
     <div class="avatar">
       <div class="sub">{tr('Avatar: the last VRM you chose is copied into avatars/ and restored at startup.')}</div>
-      <button type="button" class="action" onclick={loadVrm} disabled={closing}>{tr('Load / change VRM…')}</button>
+      <button type="button" class="action" onclick={loadVrm} disabled={busy}>{tr('Load / change VRM…')}</button>
     </div>
 
     <div class="foot">
-      <button type="button" class="action primary confirm" onclick={() => closeOverlay(true)} disabled={startDisabled || busy}>{startLabel}</button>
+      <button type="button" class="action" onclick={dismiss} disabled={busy}>{tr('Continue')}</button>
+      <button type="button" class="action primary" onclick={startAndClose} disabled={busy}>
+        {busy ? tr('Starting…') : tr('Start tracking')}
+      </button>
     </div>
   </div>
 </div>
@@ -343,8 +335,15 @@
     backdrop-filter: blur(10px);
   }
   h2 { margin: 0; font-size: 20px; }
+  .brand-tag { color: #2f9e7a; font-weight: 700; }
   .sub { color: #9aa3ad; font-size: 11px; }
   .head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
+  .close {
+    flex: 0 0 auto; width: 28px; height: 28px; padding: 0;
+    display: grid; place-items: center;
+    background: rgba(255, 255, 255, .06); color: #e8eaed;
+    border: 1px solid rgba(255, 255, 255, .12); border-radius: 7px; cursor: pointer;
+  }
   .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; }
   .field { display: grid; gap: 4px; min-width: 0; color: #9aa3ad; font-size: 10px; }
   select {
@@ -398,6 +397,6 @@
   }
   .action:disabled { opacity: .5; cursor: default; }
   .action.primary { background: #2f9e7a; border-color: #2f9e7a; color: #fff; }
-  .foot { display: flex; margin-top: 14px; }
-  .confirm { width: 100%; height: 38px; font-size: 13px; font-weight: 800; letter-spacing: .05em; }
+  .foot { display: flex; gap: 8px; margin-top: 14px; }
+  .foot .action { flex: 1 1 0; height: 36px; font-weight: 700; }
 </style>

@@ -13,24 +13,20 @@
   const sections = $derived(buildSections(config))
 </script>
 
-{#if app.ready && app.startupOpen}
-  <Startup />
-{/if}
-
-{#if app.ready && !app.startupOpen}
+{#if app.ready}
   <QuickDock />
 {/if}
 
-{#if app.ready && !app.startupOpen && app.popupSection}
+{#if app.ready && app.popupSection}
   {@const popup = sections.find((s) => s.id === app.popupSection)}
   {#if popup}<SectionPopup section={popup} />{/if}
 {/if}
 
-{#if app.ready && !app.startupOpen && get('ui.mocap_view', 'off') !== 'off'}
+{#if app.ready && get('ui.mocap_view', 'off') !== 'off'}
   <MocapWindow />
 {/if}
 
-{#if app.ready && !app.startupOpen && app.panelOpen}
+{#if app.ready && app.panelOpen}
   <aside class="xra-panel">
     <header class="xra-panel-head">
       <strong>XR Animator</strong>
@@ -42,6 +38,10 @@
       {#each sections as s (s.id)}<Section section={s} />{/each}
     </div>
   </aside>
-{:else if app.ready && !app.startupOpen}
+{:else if app.ready}
   <button class="xra-panel-launcher" onclick={() => { app.panelOpen = true; refreshStatus() }}><Icon name="Settings" size={16} /></button>
+{/if}
+
+{#if app.ready && app.startupOpen}
+  <Startup />
 {/if}
