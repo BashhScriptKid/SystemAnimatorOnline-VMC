@@ -28,6 +28,7 @@ import numpy as np
 from . import native_mediapipe as _native
 from . import object_detector
 from . import registry
+from .onnx import OnnxHolisticEngine
 
 
 def to_wire(payload: dict, capture_hint: Optional[tuple[int, int]] = None) -> dict:
@@ -752,6 +753,7 @@ class EngineDispatcher:
             "holistic-cpu": _native.HolisticTasksEngine(),
             "holistic-gpu": _native.SplitTasksEngine(),
             "face": _native.FaceTasksEngine(),
+            "onnx": OnnxHolisticEngine(),
         }
         self._hand_recovery = _native.HandRecoveryTasksEngine()
         self._hand_recovery_enabled = os.environ.get(
@@ -798,7 +800,9 @@ class EngineDispatcher:
         # Face Only can use its known-good GPU graph.
         return self._mode == "face"
 
-    def _candidate(self):
+    def _candidate(self, model_id: Optional[str] = None):
+        if model_id == registry.ONNX_HOLISTIC_ID:
+            return self._engines["onnx"]
         if self._mode == "face":
             return self._engines["face"]
         return self._engines[
@@ -899,13 +903,13 @@ class EngineDispatcher:
         return {**result, "available": True}
 
     def _start_selected(self, model_id: str) -> dict:
-        candidate = self._candidate()
+        candidate = self._candidate(model_id)
         result = candidate.load(accelerated=self._accelerated)
         if not result.get("ok") and self._accelerated:
             failed_engine = getattr(candidate, "name", "GPU")
             candidate.unload()
             self._accelerated = False
-            candidate = self._candidate()
+            candidate = self._candidate(model_id)
             result = candidate.load(accelerated=False)
         if not result.get("ok"):
             self._last_error = str(result.get("error") or "native load failed")

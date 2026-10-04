@@ -88,11 +88,53 @@ REGISTRY: dict[str, dict] = {
     },
 }
 
+# Optional ONNX Runtime backend: MediaPipe-architecture models converted to ONNX
+# (OpenCV Zoo + yakhyo releases; see the repo README credits). Same wholebody
+# contract as the MediaPipe Tasks backend, but runs through ONNX Runtime with
+# execution-provider selection.
+ONNX_HOLISTIC_ID = "onnx-mediapipe-holistic"
+_ONNX_HF = "https://huggingface.co/opencv/opencv_zoo/resolve/main/models"
+_ONNX_YAK = "https://github.com/yakhyo"
+REGISTRY[ONNX_HOLISTIC_ID] = {
+    "id": ONNX_HOLISTIC_ID,
+    "label": "ONNX Runtime · MediaPipe-equivalent (holistic)",
+    "family": "onnx",
+    "engine": "onnx",
+    "native_engine": "onnx-holistic",
+    "quality": "native",
+    "layout": "wholebody133",
+    "num_keypoints": 133,
+    "contains_face": True,
+    "contains_hands": True,
+    "whole_body": True,
+    "files": [
+        {"filename": "person_detection_mediapipe_2023mar.onnx",
+         "url": f"{_ONNX_HF}/person_detection_mediapipe/person_detection_mediapipe_2023mar.onnx",
+         "size_hint_mb": 12, "sha256": None},
+        {"filename": "pose_estimation_mediapipe_2023mar.onnx",
+         "url": f"{_ONNX_HF}/pose_estimation_mediapipe/pose_estimation_mediapipe_2023mar.onnx",
+         "size_hint_mb": 6, "sha256": None},
+        {"filename": "face_detection_short_range.onnx",
+         "url": f"{_ONNX_YAK}/mediapipe-face-mesh-onnx/releases/download/weights/face_detection_short_range.onnx",
+         "size_hint_mb": 1, "sha256": None},
+        {"filename": "face_mesh_Nx3x192x192.onnx",
+         "url": f"{_ONNX_YAK}/mediapipe-face-mesh-onnx/releases/download/weights/face_mesh_Nx3x192x192.onnx",
+         "size_hint_mb": 3, "sha256": None},
+        {"filename": "palm_detection_full_Nx3x192x192.onnx",
+         "url": f"{_ONNX_YAK}/mediapipe-hand-landmark-onnx/releases/download/weights/palm_detection_full_Nx3x192x192.onnx",
+         "size_hint_mb": 5, "sha256": None},
+        {"filename": "hand_landmark_full_Nx3x224x224.onnx",
+         "url": f"{_ONNX_YAK}/mediapipe-hand-landmark-onnx/releases/download/weights/hand_landmark_full_Nx3x224x224.onnx",
+         "size_hint_mb": 11, "sha256": None},
+    ],
+}
+
 DEFAULT_BACKEND = MEDIAPIPE_TASKS_ID
 
 # Which mocap-mode options each backend can serve.
 SUPPORTED_PIPELINES = {
     MEDIAPIPE_TASKS_ID: ["FULL_BODY", "FACE"],
+    ONNX_HOLISTIC_ID: ["FULL_BODY", "FACE"],
 }
 
 # Backends that need no downloadable weights (engine is fully bundled).
