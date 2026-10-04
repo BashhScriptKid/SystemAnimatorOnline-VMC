@@ -40,13 +40,15 @@ The Windows/Linux/macOS app version (powered by [Electron](https://www.electronj
 **Best-to-have, on top:** a standalone **external mocap transmitter** mode — capture on one device and send mocap to another (network/USB), with the self-renderer optional.
 
 ## Runtime & strategy (up front and honest)
-This fork currently runs on the **same runtime as upstream: Electron/Chromium**. Electron carries a real shell tax (install size, idle RAM, process count) that cannot be removed without leaving Chromium — and this engine is deeply coupled to its Chromium/`document.write` bootstrap, so a non-Chromium runtime means owning that bootstrap.
+Rendering still uses **Chromium** — upstream's Electron path, plus the absorbed frontend (a local HTTP server opened in a browser / NW.js). So the shell tax (install size, idle RAM, process count) still applies, and the engine stays coupled to its Chromium/`document.write` bootstrap — going non-Chromium means owning that bootstrap. **Inference, though, is now native** (see below).
 
 The strategy is therefore deliberate:
 
 - **Downstream distribution.** This fork tracks upstream and keeps its changes **additive**, so upstream releases keep merging. Upstream is alive (solo, roughly monthly), so this is the low-maintenance path.
 - **Successor-in-waiting.** If upstream ever stops, the moving target freezes and a hard fork (including a non-Chromium runtime) becomes cheap — that's when to do it, not now.
-- **Efficiency where it counts.** The real runtime cost is mocap **inference**, not the shell. The plan is a **native inference sidecar** (MediaPipe/TFLite/ONNX) behind the existing worker boundary — cutting CPU/battery several-fold without touching the shell.
+- **Efficiency where it counts.** The real runtime cost is mocap **inference**, not the shell — and it is now **native** (absorbed Python MediaPipe backend, `xra_backends/`) rather than browser WASM, cutting CPU/battery without touching the shell.
+
+**Upstream sync.** `master` tracks upstream as the engine (current base: `53c20eb`, v0.35.0 — upstream is an ancestor of `master`; behind = 0). Use `tools/sync-upstream.sh` on each upstream release to fetch, forecast the conflict surface, and merge; attribution and upstream license/credits are preserved. This fork's absorbed Podcasters Edition work is the main divergence surface, so syncs are occasional and manual by design.
 
 ## Status
 Early, work in progress. Interfaces and behavior may change.
