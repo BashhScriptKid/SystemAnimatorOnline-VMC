@@ -1191,6 +1191,8 @@
     const vw = window.innerWidth || 1280, vh = window.innerHeight || 720;
     mocapStage.style.width = vw + 'px';
     mocapStage.style.height = vh + 'px';
+    // 'Webcam only' hides the skeleton layer; every other mode shows it.
+    mocapStage.classList.toggle('xra-hide-skeleton', config.ui?.mocap_view === 'video');
     const vr = cameraRectOrDefault();
     const W = host.clientWidth || 1, H = host.clientHeight || 1;
     const k = Math.min(W / vr.w, H / vr.h) || 1;

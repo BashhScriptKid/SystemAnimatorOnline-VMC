@@ -92,7 +92,7 @@
       <span class="flex-1 text-[12px] font-semibold">{t('Mocap')}</span>
       <span class="flex items-center gap-1 text-[10.5px] tabular-nums text-[var(--xra-ui-dim)]">
         <span class="h-1.5 w-1.5 rounded-full" class:bg-[var(--xra-ui-accent)]={tracking} class:bg-[#565656]={!tracking}></span>
-        {tracking ? `${Math.round(fps)} fps` : 'OFF'}
+        {tracking ? (fps >= 1 ? `${Math.round(fps)} fps` : 'LIVE') : 'OFF'}
       </span>
       <select
         class="rounded-md border border-white/15 bg-[#101214] px-1.5 py-0.5 text-[11px] text-[var(--xra-ui-fg)]"

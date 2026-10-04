@@ -61,6 +61,7 @@ body.xra-total-clean-screen #XRA_SVELTE { display: none !important; }
 /* Lock every wireframe canvas onto the camera rect (CSS vars set by the host)
    so it overlays the webcam and rides the stage transform, regardless of when
    the canvas is created or how the native layout repositions it. */
+.xra-mocap-stage.xra-hide-skeleton .xra-mocap-wireframe-front { display: none !important; }
 .xra-mocap-stage .xra-mocap-wireframe-front {
   position: absolute !important;
   left: var(--xra-cam-x, 0) !important;
