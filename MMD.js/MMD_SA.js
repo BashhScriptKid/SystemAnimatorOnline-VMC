@@ -9912,7 +9912,7 @@ obj_pos.x*sign, obj_pos.y, -obj_pos.z*sign,
         const _tracker_index = ((x_object.VMC_tracker_index != null) ? x_object.VMC_tracker_index : tracker_index);
         if (warudo_mode) {
           const msg = 'XRAnimator|set_tracker_scale|' + (_tracker_index + ((_tracker_index < 10) ? ' ' : '')) + '|' + (x_object._tracker_scale_ * model_pos_scale);
-          System._browser.WebSocket.send_message('ws://localhost:19190', msg);
+          SA_bridge.net.wsSend('ws://localhost:19190', msg);
 //console.log(msg)
         }
       }

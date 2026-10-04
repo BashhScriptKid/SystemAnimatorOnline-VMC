@@ -175,27 +175,60 @@
     }
   }
 
-  function webSocket() { return (typeof System !== "undefined" && System._browser && System._browser.WebSocket) || null }
+  function rawRequire(name) {
+    try { if (typeof require === "function") return require(name) }
+    catch (err) {}
+    try { return SA_require(name) }
+    catch (err) {}
+    return null
+  }
+
+  var _ws_server_started = false
+  var _ws_clients = {}
 
   var net = {
     wsServer: function (port, onMessage) {
-      var W = webSocket()
-      if (!W || !W.init_server) return Promise.reject(new Error("net.wsServer requires the WebSocket shim"))
-      return Promise.resolve(W.init_server(port)).then(function () {
-        if (onMessage)
-          window.addEventListener("SA_WebSocket_server_on_message", function (e) { onMessage(e.detail.message) })
-        return true
+      port = port || 13939
+      if (_ws_server_started) return Promise.resolve(true)
+      return new Promise(function (resolve, reject) {
+        try {
+          var http = rawRequire("http")
+          var WS = rawRequire("node_modules.asar/ws")
+          if (!http || !WS) return reject(new Error("net.wsServer: http/ws unavailable"))
+          var server = http.createServer()
+          var wss = new WS.Server({ server: server })
+          wss.on("connection", function (socket) {
+            socket.on("message", function (data) {
+              var msg = data.toString()
+              window.dispatchEvent(new CustomEvent("SA_WebSocket_server_on_message", { detail: { message: msg } }))
+              if (onMessage) onMessage(msg)
+            })
+          })
+          server.listen(port, function () {
+            _ws_server_started = true
+            console.log("Data stream server started on port " + port)
+            resolve(true)
+          })
+        }
+        catch (err) { reject(err) }
       })
     },
     wsClient: function (url, onMessage) {
-      var W = webSocket()
-      if (!W || !W.init_client) return Promise.reject(new Error("net.wsClient requires the WebSocket shim"))
-      return W.init_client(url)
+      if (!url) return Promise.reject(new Error("net.wsClient: url required"))
+      if (_ws_clients[url]) return _ws_clients[url]
+      _ws_clients[url] = new Promise(function (resolve) {
+        var socket = new WebSocket(url)
+        socket.addEventListener("error", function () { setTimeout(function () { _ws_clients[url] = null }, 1000) })
+        socket.addEventListener("open", function () {
+          if (onMessage) socket.addEventListener("message", function (e) { onMessage(e.data) })
+          resolve(socket)
+        })
+        socket.addEventListener("close", function () { _ws_clients[url] = null })
+      })
+      return _ws_clients[url]
     },
     wsSend: function (url, message) {
-      var W = webSocket()
-      if (!W || !W.send_message) return Promise.reject(new Error("net.wsSend requires the WebSocket shim"))
-      return Promise.resolve(W.send_message(url, message))
+      return net.wsClient(url).then(function (socket) { if (socket) socket.send(message) })
     },
     oscSend: function (host, port, bundle) {
       var O = (typeof System !== "undefined" && System._browser && System._browser.OSC) || (typeof MMD_SA !== "undefined" && MMD_SA.OSC) || null

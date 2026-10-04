@@ -15302,7 +15302,7 @@ return this.skip_background_rendering && this.hidden;
       };
     })());
 
-//System._browser.WebSocket.init_server(13939).then(()=>{ System._browser.WebSocket.send_message('ws://localhost:19190', '{"app":"XRAnimator", "action":"is_ready"}'); });
+//SA_bridge.net.wsServer(13939).then(()=>{ SA_bridge.net.wsSend('ws://localhost:19190', '{"app":"XRAnimator", "action":"is_ready"}'); });
   });
 
   window.addEventListener('SA_WebSocket_server_on_message', (()=>{
