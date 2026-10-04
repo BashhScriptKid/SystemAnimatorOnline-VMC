@@ -247,7 +247,7 @@
 
     function getCameraBusyInfo() {
       const snap = XRA.xraBackend?.snapshot?.();
-      const cap = snap?.capture || window.XRA_BACKEND_CAMERA?.status?.()?.backend?.capture;
+      const cap = snap?.capture || window.SA_bridge.backend?.status?.()?.backend?.capture;
       if (cap?.camera_busy) {
         const rawProcs = (cap.busy_processes && cap.busy_processes.length)
           ? cap.busy_processes
@@ -324,10 +324,10 @@
     start.onclick = () => closeOverlay(true);
 
     try {
-      const bStatus = window.XRA_BACKEND_CAMERA?.status?.();
+      const bStatus = window.SA_bridge.backend?.status?.();
       const cam = window.System?._browser?.camera;
       if (bStatus?.backend?.capture?.running && !cam?.running) {
-        window.XRA_BACKEND_CAMERA?.stop?.().catch(() => {});
+        window.SA_bridge.backend?.stop?.().catch(() => {});
       }
     } catch (_) {}
 

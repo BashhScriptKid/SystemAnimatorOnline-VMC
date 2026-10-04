@@ -695,7 +695,7 @@
         if (typeof XRA.nativeBridge?.stopNativeStreamer === 'function') {
           await XRA.nativeBridge.stopNativeStreamer();
         } else {
-          const backendCamera = window.XRA_BACKEND_CAMERA;
+          const backendCamera = window.SA_bridge.backend;
           if (backendCamera?.stop) await backendCamera.stop();
           else XRA.xraBackend?.sendControl?.({ type: 'capture', action: 'stop' });
         }
@@ -750,7 +750,7 @@
         if (typeof XRA.nativeBridge?.stopNativeStreamer === 'function') {
           await XRA.nativeBridge.stopNativeStreamer();
         } else {
-          const backendCamera = window.XRA_BACKEND_CAMERA;
+          const backendCamera = window.SA_bridge.backend;
           if (backendCamera?.stop) await backendCamera.stop();
           else XRA.xraBackend?.sendControl?.({ type: 'capture', action: 'stop' });
         }
@@ -1215,7 +1215,7 @@
       }
       if (XRA?.xraBackend?.active === true) {
         try {
-          const backendCamera = window.XRA_BACKEND_CAMERA;
+          const backendCamera = window.SA_bridge.backend;
           if (typeof backendCamera?.configure !== 'function') throw new Error('backend camera control unavailable');
           await backendCamera.configure({ selfie_mode: !!value });
         } catch (e) {

@@ -186,8 +186,8 @@
 
   function currentMocapMode() {
     try {
-      if (typeof window !== 'undefined' && window.XRA_BACKEND_CAMERA?.status) {
-        const mode = window.XRA_BACKEND_CAMERA.status()?.mocapMode;
+      if (typeof window !== 'undefined' && window.SA_bridge.backend?.status) {
+        const mode = window.SA_bridge.backend.status()?.mocapMode;
         if (mode === 'face' || mode === 'holistic') return mode;
       }
       const pipe = String(

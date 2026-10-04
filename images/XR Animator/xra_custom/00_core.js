@@ -1202,7 +1202,7 @@
                   let externalFps = 0;
                   if (externalBackendActive) {
                     try {
-                      const capture = window.XRA_BACKEND_CAMERA?.status?.()?.backend?.capture
+                      const capture = window.SA_bridge.backend?.status?.()?.backend?.capture
                         || window.XRA?.xraBackend?.snapshot?.()?.capture
                         || {};
                       externalFps = Number(

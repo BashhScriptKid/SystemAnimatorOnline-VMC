@@ -50,7 +50,7 @@
     // In external mode Python owns the real webcam and runs one Holistic
     // inference for body, face and hands. Explicitly forward the user's
     // geometry and the single effective inference rate.
-    if (XRA.xraBackend?.active === true && window.XRA_BACKEND_CAMERA?.configure) {
+    if (XRA.xraBackend?.active === true && window.SA_bridge.backend?.configure) {
       const fps = effectivePoseFps();
       const inferMode = config.performance?.infer_mode || 'native';
       let inferW = null, inferH = null;
@@ -58,7 +58,7 @@
         const [w, h] = inferMode.split('x').map(Number);
         if (w > 0 && h > 0) { inferW = w; inferH = h; }
       }
-      window.XRA_BACKEND_CAMERA.configure({
+      window.SA_bridge.backend.configure({
         width: Number(config.camera.width) || 640,
         height: Number(config.camera.height) || 360,
         fps,
@@ -184,9 +184,9 @@
         fps: effectivePoseFps()
       }
     });
-    if (XRA.xraBackend?.active === true && window.XRA_BACKEND_CAMERA?.configure) {
+    if (XRA.xraBackend?.active === true && window.SA_bridge.backend?.configure) {
       const fps = effectivePoseFps();
-      window.XRA_BACKEND_CAMERA.configure({ fps }).catch(e => {
+      window.SA_bridge.backend.configure({ fps }).catch(e => {
         console.warn(TAG, 'external inference rate configuration failed', e);
       });
     }
@@ -806,8 +806,8 @@
         if (window.MMD_SA?.MMD?.motionManager && !window.MMD_SA.MMD.motionManager.para_SA?.motion_tracking_enabled) {
           window.MMD_SA_options?.Dungeon_options?.item_base?.pose?._change_motion_?.(0, true);
         }
-        if (window.XRA_BACKEND_CAMERA?.configure) {
-          window.XRA_BACKEND_CAMERA.configure({ mocap_mode: savedNative === 'Face' ? 'face' : 'holistic' }).catch(() => {});
+        if (window.SA_bridge.backend?.configure) {
+          window.SA_bridge.backend.configure({ mocap_mode: savedNative === 'Face' ? 'face' : 'holistic' }).catch(() => {});
         }
       }
       else if (window.MMD_SA_options?.user_camera?.streamer_mode) {
@@ -1011,8 +1011,8 @@
     config.performance.tracking_pipeline = pipelineNameFromNative(native);
     initNative(native);
     const mocapMode = native === 'Face' ? 'face' : 'holistic';
-    if (window.XRA_BACKEND_CAMERA?.configure) {
-      await window.XRA_BACKEND_CAMERA.configure({ mocap_mode: mocapMode });
+    if (window.SA_bridge.backend?.configure) {
+      await window.SA_bridge.backend.configure({ mocap_mode: mocapMode });
     }
     if (XRA.xraBackend?.sendControl) {
       XRA.xraBackend.sendControl({ type: 'mode', mode: mocapMode });
@@ -1029,8 +1029,8 @@
     config.performance.tracking_pipeline = pipelineNameFromNative(native);
     initNative(native);
     const mocapMode = native === 'Face' ? 'face' : 'holistic';
-    if (window.XRA_BACKEND_CAMERA?.configure) {
-      await window.XRA_BACKEND_CAMERA.configure({ mocap_mode: mocapMode });
+    if (window.SA_bridge.backend?.configure) {
+      await window.SA_bridge.backend.configure({ mocap_mode: mocapMode });
     }
     if (XRA.xraBackend?.sendControl) {
       XRA.xraBackend.sendControl({ type: 'mode', mode: mocapMode });
