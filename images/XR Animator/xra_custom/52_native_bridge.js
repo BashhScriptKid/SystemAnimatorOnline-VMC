@@ -1208,6 +1208,12 @@
       node.style.setProperty('top', vr.y + 'px', 'important');
       node.style.setProperty('width', vr.w + 'px', 'important');
       node.style.setProperty('height', vr.h + 'px', 'important');
+      // The "pending" class keeps the canvas visibility:hidden until the
+      // native on-stage layout syncs — which never happens in native mode.
+      // Reparenting shows the real canvas, so clear it and force visible.
+      node.classList.remove('xra-mocap-wireframe-pending');
+      node.style.setProperty('visibility', 'visible', 'important');
+      node.hidden = false;
     }
 
     const wantsVideo = config.ui?.mocap_view === 'both' || config.ui?.mocap_view === 'video';
