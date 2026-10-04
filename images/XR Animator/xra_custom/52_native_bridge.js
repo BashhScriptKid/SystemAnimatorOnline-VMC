@@ -1197,6 +1197,12 @@
     const ox = (W - vr.w * k) / 2, oy = (H - vr.h * k) / 2;
     mocapStage.style.transformOrigin = '0 0';
     mocapStage.style.transform = `translate(${ox - vr.x * k}px, ${oy - vr.y * k}px) scale(${k})`;
+    // Expose the camera rect to CSS so ANY wireframe canvas (even one created
+    // after this run) is locked onto it, immune to the native inline layout.
+    mocapStage.style.setProperty('--xra-cam-x', vr.x + 'px');
+    mocapStage.style.setProperty('--xra-cam-y', vr.y + 'px');
+    mocapStage.style.setProperty('--xra-cam-w', vr.w + 'px');
+    mocapStage.style.setProperty('--xra-cam-h', vr.h + 'px');
     // Align the skeleton canvases to the camera rect so they overlay the webcam
     // and map through the SAME transform as the camera image. Without this the
     // canvases keep their own native rect (often a different corner/scale) and
