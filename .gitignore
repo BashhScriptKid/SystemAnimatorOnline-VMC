@@ -54,3 +54,7 @@ __pycache__/
 
 # Scratch / test artifacts
 /tmp/
+
+# Svelte UI toolchain
+/ui/node_modules/
+/ui/dist/
