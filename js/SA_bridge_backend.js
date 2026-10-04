@@ -2,8 +2,9 @@
   if (typeof SA_bridge === "undefined")
     return
 
-  function pose() { return (typeof window !== "undefined" && (window.XRA_BACKEND || window.XRA_NATIVE)) || null }
-  function cam() { return (typeof window !== "undefined" && window.XRA_BACKEND_CAMERA) || null }
+  var __scope = (typeof window !== "undefined") ? window : (typeof self !== "undefined") ? self : globalThis
+  function pose() { return (__scope.XRA_BACKEND || __scope.XRA_NATIVE) || null }
+  function cam() { return __scope.XRA_BACKEND_CAMERA || null }
 
   function post(path, body) {
     return fetch(path, {
@@ -69,6 +70,14 @@
   }
 
   SA_bridge.provide("backend", backend)
+
+  // Mirror XRA_NATIVE's property getters so SA_bridge.backend is a shape-compatible
+  // drop-in for the worker/data-plane accessor (active/latest/face/hands...).
+  ;["active", "latest", "face", "leftHand", "rightHand", "leftHandWorld", "rightHandWorld"].forEach(function (name) {
+    var get = function () { return backend.get(name) }
+    Object.defineProperty(backend, name, { get: get, configurable: true })
+    Object.defineProperty(SA_bridge.backend, name, { get: get, configurable: true })
+  })
 
   if (typeof console !== "undefined" && console.log)
     console.log("[SA_bridge] backend capability provided")

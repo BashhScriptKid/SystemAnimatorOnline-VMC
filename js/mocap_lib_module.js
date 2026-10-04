@@ -217,7 +217,7 @@ function _onmessage(e) {
     XRA_backend_last_options = data.options;
     if (Number.isFinite(Number(data.w))) XRA_backend_last_w = Number(data.w);
     if (Number.isFinite(Number(data.h))) XRA_backend_last_h = Number(data.h);
-    XRA_NATIVE?.frontendReady?.(XRA_backend_last_w, XRA_backend_last_h);
+    SA_bridge.backend?.frontendReady?.(XRA_backend_last_w, XRA_backend_last_h);
   }
 
   if (data.canvas) {
@@ -242,7 +242,7 @@ function _onmessage(e) {
     XRA_backend_last_tick_at = performance.now();
 
     // Preserve the original one-request/one-reply worker contract. A WebSocket
-    // callback only updates XRA_NATIVE.latest; this tick consumes it. Never run a
+    // callback only updates SA_bridge.backend.latest; this tick consumes it. Never run a
     // second push-driven process_video_buffer() in parallel.
     if (XRA_backend_tick_busy) {
       XRA_backend_diag.busyReplays++;
@@ -358,6 +358,10 @@ use_mobilenet = param.get('use_mobilenet');
 
 if (is_worker) {
   importScripts('./one_euro_filter.js');
+  // Host boundary + native backend capability (SA_bridge.backend), then the raw bridge.
+  try { importScripts('./SA_bridge.js'); importScripts('./SA_bridge_backend.js'); } catch (e) {
+    console.error('[XRA MOCAP] failed to load SA_bridge:', e);
+  }
   // Native Python backend bridge
   try { importScripts('./xra_backend_bridge.js'); } catch (e) {
     console.error('[XRA MOCAP] failed to load xra_backend_bridge.js:', e);
@@ -380,11 +384,11 @@ if (is_worker) {
       z_depth_scale: 3,
       timestamp: performance.now()
     };
-    XRA_NATIVE.frontendReady?.(XRA_backend_last_w, XRA_backend_last_h);
+    SA_bridge.backend.frontendReady?.(XRA_backend_last_w, XRA_backend_last_h);
   }
-  if (!XRA_backend_pose_listener_installed && XRA_NATIVE?.setPoseListener) {
+  if (!XRA_backend_pose_listener_installed && SA_bridge.backend?.setPoseListener) {
     XRA_backend_pose_listener_installed = true;
-    XRA_NATIVE.setPoseListener(XRA_process_backend_pose_push);
+    SA_bridge.backend.setPoseListener(XRA_process_backend_pose_push);
   }
 }
 
@@ -426,8 +430,8 @@ function _onmessage(e) {
   var posenet_initialized, handpose_initialized, holistic_initialized, human_initialized;
   async function PoseAT_load_lib(options) {
     // Without this, PoseAT can start MediaPipe WASM before BroadcastChannel replies.
-  if (is_worker && typeof XRA_NATIVE !== 'undefined' && XRA_NATIVE?.waitUntilConfigured) {
-    await XRA_NATIVE.waitUntilConfigured(1500);
+  if (is_worker && typeof SA_bridge !== 'undefined' && SA_bridge.backend && SA_bridge.backend?.waitUntilConfigured) {
+    await SA_bridge.backend.waitUntilConfigured(1500);
   }
     // Calibration / startup decoupling: when an NATIVE or native-MediaPipe
     // backend is active, do NOT instantiate the WASM MediaPipe runtime at all
@@ -994,12 +998,12 @@ function XRA_backend_close_tick_frame(frame) {
 }
 
 function XRA_backend_has_fresh_pose() {
-  const status = (typeof XRA_NATIVE !== 'undefined') ? XRA_NATIVE.status : null;
+  const status = (typeof SA_bridge !== 'undefined' && SA_bridge.backend) ? SA_bridge.backend.status() : null;
   return !!status && Number(status.sequence) !== Number(status.consumed);
 }
 
 self.XRA_BACKEND_PIPELINE_STATUS = function () {
-  const bridge = (typeof XRA_NATIVE !== "undefined") ? XRA_NATIVE.status : null;
+  const bridge = (typeof SA_bridge !== 'undefined' && SA_bridge.backend) ? SA_bridge.backend.status() : null;
   return {
     ...XRA_backend_diag,
     hasOptions: !!XRA_backend_last_options,
@@ -1123,17 +1127,17 @@ function XRA_send_telemetry(payload) {
 }
 
 // -- NATIVE backend bridge accessors ------------------------------------------
-// The bridge (js/xra_backend_bridge.js) installs self.XRA_NATIVE. These thin
+// The bridge (js/xra_backend_bridge.js) installs self.SA_bridge.backend. These thin
 // wrappers keep the call sites safe when the bridge is absent (e.g. the file
 // was not shipped, or importScripts failed) so MediaPipe keeps working.
 function XRA_NATIVE_active() {
-  return is_worker && typeof XRA_NATIVE !== 'undefined' && XRA_NATIVE && XRA_NATIVE.active;
+  return is_worker && typeof SA_bridge !== 'undefined' && SA_bridge.backend && SA_bridge.backend.active;
 }
 
 function XRA_NATIVE_pose(rgba, w, h) {
   if (!XRA_NATIVE_active()) return null;
   try {
-    return (XRA_NATIVE.consumeLatestPose ? XRA_NATIVE.consumeLatestPose(w, h) : XRA_NATIVE.maybeReplaceFrame(null, w, h)) || null;
+    return (SA_bridge.backend.consumeLatestPose ? SA_bridge.backend.consumeLatestPose(w, h) : SA_bridge.backend.maybeReplaceFrame(null, w, h)) || null;
   }
   catch (e) {
     XRA_debug_event('native-bridge-error', { error:String(e) });
@@ -1194,11 +1198,11 @@ function _xra_fill_hand_world_landmarks(sourceArr, poolArr) {
 // Build the worker's `hands` array from normalized COCO-hand landmarks.
 // hands_adjust(..., from_native_backend=true) performs the single normalized->pixel scale.
 function XRA_NATIVE_hands(w, h) {
-  if (!XRA_NATIVE_active() || typeof XRA_NATIVE.leftHand === 'undefined') return null;
-  const hasLeft = _xra_fill_hand_landmarks(XRA_NATIVE.leftHand, _XRA_POOL_HAND_L);
-  const hasRight = _xra_fill_hand_landmarks(XRA_NATIVE.rightHand, _XRA_POOL_HAND_R);
-  const hasLeftWorld = hasLeft && _xra_fill_hand_world_landmarks(XRA_NATIVE.leftHandWorld, _XRA_POOL_HAND_WORLD_L);
-  const hasRightWorld = hasRight && _xra_fill_hand_world_landmarks(XRA_NATIVE.rightHandWorld, _XRA_POOL_HAND_WORLD_R);
+  if (!XRA_NATIVE_active() || typeof SA_bridge.backend.leftHand === 'undefined') return null;
+  const hasLeft = _xra_fill_hand_landmarks(SA_bridge.backend.leftHand, _XRA_POOL_HAND_L);
+  const hasRight = _xra_fill_hand_landmarks(SA_bridge.backend.rightHand, _XRA_POOL_HAND_R);
+  const hasLeftWorld = hasLeft && _xra_fill_hand_world_landmarks(SA_bridge.backend.leftHandWorld, _XRA_POOL_HAND_WORLD_L);
+  const hasRightWorld = hasRight && _xra_fill_hand_world_landmarks(SA_bridge.backend.rightHandWorld, _XRA_POOL_HAND_WORLD_R);
   if (!hasLeft && !hasRight) return null;
 
   _XRA_POOL_HANDS_OBJ.multiHandedness.length = 0;
@@ -1271,8 +1275,8 @@ const _XRA_POOL_FACEMESH_RESULT = {
 };
 
 function XRA_NATIVE_facemesh(w, h) {
-  if (!XRA_NATIVE_active() || typeof XRA_NATIVE.face === 'undefined') return null;
-  const face = XRA_NATIVE.face;
+  if (!XRA_NATIVE_active() || typeof SA_bridge.backend.face === 'undefined') return null;
+  const face = SA_bridge.backend.face;
   const landmarks = face?.landmarks;
   if (!Array.isArray(landmarks) || landmarks.length < 468) return null;
 
