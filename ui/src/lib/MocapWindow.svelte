@@ -1,7 +1,7 @@
 <script>
   import { onMount } from 'svelte'
   import Icon from './Icon.svelte'
-  import { config, get, set, t } from './xra.svelte.js'
+  import { get, set, t } from './xra.svelte.js'
 
   const X = () => window.XRA
 
@@ -40,16 +40,6 @@
     window.addEventListener('pointerup', up)
   }
 
-  function drawFit(ctx, src, W, H, sw, sh, mirror) {
-    if (!sw || !sh) return
-    const s = Math.min(W / sw, H / sh)
-    const dw = sw * s, dh = sh * s
-    const dx = (W - dw) / 2, dy = (H - dh) / 2
-    if (mirror) { ctx.save(); ctx.translate(W, 0); ctx.scale(-1, 1) }
-    ctx.drawImage(src, dx, dy, dw, dh)
-    if (mirror) ctx.restore()
-  }
-
   function tick() {
     raf = requestAnimationFrame(tick)
     if (!canvas) return
@@ -66,15 +56,30 @@
     ctx.clearRect(0, 0, W, H)
     const mode = get('ui.mocap_view', 'off')
     if (mode === 'off') return
+
     const src = X()?.nativeBridge?.getMocapSources?.() || {}
-    const vid = src.video
-    const wf = (src.canvases || []).find(c => c && c.width)
-    const mirror = !!config.devices?.mirror_preview
-    if ((mode === 'both' || mode === 'video') && vid && vid.readyState >= 2) {
-      drawFit(ctx, vid, W, H, vid.videoWidth, vid.videoHeight, mirror)
+    const cr = src.cameraRect || { x: 0, y: 0, w: window.innerWidth, h: window.innerHeight }
+    if (!cr.w || !cr.h) return
+    // Map the native camera region into the window; the skeleton canvases use
+    // the same transform so they stay aligned with the webcam image.
+    const k = Math.min(W / cr.w, H / cr.h)
+    const ox = (W - cr.w * k) / 2, oy = (H - cr.h * k) / 2
+    const mx = (x) => ox + (x - cr.x) * k
+    const my = (y) => oy + (y - cr.y) * k
+
+    if (mode === 'both' || mode === 'video') {
+      const camSrc = (src.videoCanvas && src.videoCanvas.width) ? src.videoCanvas : src.video
+      const sw = camSrc?.videoWidth || camSrc?.width || 0
+      if (camSrc && sw) {
+        try { ctx.drawImage(camSrc, ox, oy, cr.w * k, cr.h * k) } catch (e) {}
+      }
     }
-    if ((mode === 'both' || mode === 'wireframe') && wf) {
-      drawFit(ctx, wf, W, H, wf.width, wf.height, false)
+    if (mode === 'both' || mode === 'wireframe') {
+      for (const c of (src.canvases || [])) {
+        const r = c.rect
+        if (!r) continue
+        try { ctx.drawImage(c.node, mx(r.x), my(r.y), r.w * k, r.h * k) } catch (e) {}
+      }
     }
   }
 

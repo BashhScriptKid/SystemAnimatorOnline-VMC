@@ -27,7 +27,7 @@ export const SECTION_INFO = {
 export const SECTION_ORDER = ['performance', 'tracking', 'body', 'collider', 'lip', 'background', 'stage', 'avatar', 'second_avatar', 'recorder', 'visual_effects', 'debug', 'ui', 'camera', 'devices', 'pose_model']
 
 export const SKIP_SECTIONS = new Set(['left_settings', '_custom_', '_excluded_'])
-export const SKIP_PATHS = new Set(['camera.view_presets', 'camera.selected_view_preset', 'ui.preview_video', 'ui.preview_debug', 'performance.auto_last_result', 'recorder.output_dir'])
+export const SKIP_PATHS = new Set(['camera.view_presets', 'camera.selected_view_preset', 'ui.preview_video', 'ui.preview_wireframe', 'ui.preview_debug', 'performance.auto_last_result', 'recorder.output_dir'])
 
 function humanize(s) {
   const words = String(s).replace(/_/g, ' ').replace(/([a-z])([A-Z])/g, '$1 $2').trim()
@@ -41,7 +41,6 @@ export const OVERRIDES = {
   'background.color': { type: 'color' },
   'background.path': { type: 'text' },
 
-  'ui.preview_wireframe': { type: 'tristate', label: 'Mocap wireframe' },
   'ui.mocap_view': { type: 'select', label: 'Mocap window', options: [['off', 'Off'], ['both', 'Webcam + skeleton'], ['wireframe', 'Skeleton only'], ['video', 'Webcam only']] },
 
   'performance.tracking_pipeline': { type: 'select', label: 'Tracking mode', options: [['FULL_BODY', 'Full Body'], ['FACE', 'Face only'], ['UPPER_BODY', 'Upper body']] },

@@ -1111,12 +1111,12 @@
 
   function applyMocapWireframeVisibility() {
     const windowed = mocapWindowActive();
-    const show = !windowed && wireframeShouldShow();
-    setPreviewVisibility('wireframe', show, { remember: false });
-    // The layer's canvas is reparented/created late; gate it with body classes
-    // (see xra.css) so it can never flash before the first apply.
-    document.body?.classList.toggle('xra-tracking-on', !windowed && !!cameraRunning());
-    document.body?.classList.toggle('xra-wireframe-off', windowed || config.ui?.preview_wireframe === false);
+    // The on-stage mocap overlay is retired: the mocap view now lives only in
+    // the movable window. Keep the layer hidden so tracking never paints the
+    // skeleton over the stage (even with the window off).
+    setPreviewVisibility('wireframe', false, { remember: false });
+    document.body?.classList.remove('xra-tracking-on');
+    document.body?.classList.add('xra-wireframe-off');
     if (windowed) {
       // Keep a hidden live stream available for the window to mirror.
       if (config.ui?.mocap_view === 'both' || config.ui?.mocap_view === 'video') {
@@ -1127,16 +1127,34 @@
     } else {
       try { setWebcamPreviewVisible(config.ui?.preview_video === true); } catch (e) {}
     }
-    return show;
+    return false;
   }
   XRA.applyMocapWireframeVisibility = applyMocapWireframeVisibility;
 
-  // Live DOM sources the mocap window mirrors.
+  // Viewport rect of a node, falling back to its inline layout for nodes inside
+  // a display:none layer (getBoundingClientRect would be 0).
+  function nodeRect(node) {
+    if (!(node instanceof Element)) return null;
+    const r = node.getBoundingClientRect();
+    if (r.width > 0 && r.height > 0) return { x: r.x, y: r.y, w: r.width, h: r.height };
+    const s = node.style || {};
+    const w = parseFloat(s.width), h = parseFloat(s.height);
+    if (w > 0 && h > 0) return { x: parseFloat(s.left) || 0, y: parseFloat(s.top) || 0, w, h };
+    return null;
+  }
+
+  // Live DOM sources the mocap window mirrors, with their viewport rects so the
+  // window can reproduce the native layout (camera region + skeleton) exactly.
   function getMocapSources() {
+    const cam = window.System?._browser?.camera;
+    const videoCanvas = cam?.video_canvas || null;
+    const canvases = overlayCanvasCandidates('wireframe');
     return {
       mode: config.ui?.mocap_view || 'off',
       video: webcamPreviewNode(),
-      canvases: overlayCanvasCandidates('wireframe')
+      videoCanvas,
+      cameraRect: nodeRect(videoCanvas),
+      canvases: canvases.map(node => ({ node, rect: nodeRect(node) })).filter(c => c.rect)
     };
   }
 
