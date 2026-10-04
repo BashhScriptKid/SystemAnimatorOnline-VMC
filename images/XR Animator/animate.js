@@ -11295,7 +11295,7 @@ function get_state(id) {
   return state;
 }
 
-function check_hotkey(acc) {
+async function check_hotkey(acc) {
   if (!acc) {
     if (!hotkey_combo || !hotkey_combo[0] || !hotkey_combo[1]) return false;
     acc = hotkey_combo.join('+');
@@ -11307,7 +11307,7 @@ function check_hotkey(acc) {
     hotkey_info = '❌' + System._browser.translation.get('XR_Animator.UI.UI_options.miscellaneous_options.hotkey.reserved');
   }
   else {
-    state = browser_native_mode || !webkit_electron_remote.globalShortcut.isRegistered(acc);
+    state = browser_native_mode || !(await SA_bridge.hotkey.isRegistered(acc));
     hotkey_info = (state) ? '✔️OK' : '❌' + System._browser.translation.get('XR_Animator.UI.UI_options.miscellaneous_options.hotkey.not_usable');
   }
 
@@ -11340,13 +11340,15 @@ for (let i = 0; i < 2; i++) {
     hotkey_combo[i] = '';
 }
 
-if (check_hotkey()) {
-  hotkey_acc = hotkey_combo.join('+');
-  hotkey_combo = null;
-  System._browser.hotkeys.disabled = false;
-}
+check_hotkey().then((ok)=>{
+  if (ok) {
+    hotkey_acc = hotkey_combo.join('+');
+    hotkey_combo = null;
+    System._browser.hotkeys.disabled = false;
+  }
 
-MMD_SA_options.Dungeon.run_event(null,null,5);
+  MMD_SA_options.Dungeon.run_event(null,null,5);
+});
 
 return true;
     } },

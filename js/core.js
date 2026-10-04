@@ -389,12 +389,7 @@ function electronRegisterCheck() {
     return false;
 
   if (windows_mode) {
-    let registered;
-    try {
-      registered = webkit_electron_remote.app.isDefaultProtocolClient("system-animator");
-    }
-    catch (err) {}
-    return registered;
+    return !!SA_protocol_registered;
   }
   else if (linux_mode) {
     const SA_link = SA_require('process').env.HOME + "/Documents/system-animator";

@@ -44,6 +44,11 @@ if (webkit_mode || WallpaperEngine_CEF_mode || browser_native_mode) {
   document.write('<script src="js/SA_bridge_node.js"></scr'+'ipt>\n')
 }
 
+var SA_protocol_registered
+if (webkit_electron_mode) {
+  SA_bridge.protocol.isRegistered("system-animator").then(function (v) { SA_protocol_registered = v })
+}
+
 var path_demo, path_demo_by_url
 
 function SA_load_scripts() {
