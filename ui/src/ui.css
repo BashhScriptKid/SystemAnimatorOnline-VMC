@@ -109,11 +109,19 @@ body.xra-total-clean-screen #XRA_SVELTE { display: none !important; }
 
 .xra-row {
   display: grid; grid-template-columns: 1fr auto; align-items: center;
-  gap: 8px; padding: 4px 0;
+  column-gap: 10px; row-gap: 4px; padding: 5px 0;
 }
-.xra-row-label { color: var(--xra-ui-fg); }
-.xra-row input[type="range"] { grid-column: 1 / -1; width: 100%; accent-color: var(--xra-ui-accent); }
-.xra-val { color: var(--xra-ui-dim); font-variant-numeric: tabular-nums; }
+.xra-row-label { color: var(--xra-ui-fg); min-width: 0; }
+.xra-val { color: var(--xra-ui-dim); font-variant-numeric: tabular-nums; text-align: right; }
+
+/* Slider rows: label + value on one line, the track full width beneath. */
+.xra-row-slider { grid-template-rows: auto auto; }
+.xra-row-slider .xra-row-label { grid-row: 1; grid-column: 1; }
+.xra-row-slider .xra-val { grid-row: 1; grid-column: 2; }
+.xra-row-slider input[type="range"] {
+  grid-row: 2; grid-column: 1 / -1; width: 100%;
+  accent-color: var(--xra-ui-accent);
+}
 .xra-row select, .xra-row input[type="text"] {
   background: #101214; color: var(--xra-ui-fg);
   border: 1px solid var(--xra-ui-border); border-radius: 6px; padding: 3px 6px; max-width: 180px;

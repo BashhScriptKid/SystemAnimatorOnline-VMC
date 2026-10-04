@@ -8,7 +8,7 @@
   const fromTri = (s) => (s === 'off' ? false : null)
 </script>
 
-<label class="xra-row">
+<label class="xra-row" class:xra-row-slider={control.type === 'slider'}>
   <span class="xra-row-label">{t(control.label)}</span>
   {#if control.type === 'select'}
     <select value={get(control.path)} onchange={(e) => set(control.path, e.currentTarget.value)}>
@@ -20,9 +20,9 @@
       <option value="off">{t('Off')}</option>
     </select>
   {:else if control.type === 'slider'}
+    <span class="xra-val">{get(control.path)}</span>
     <input type="range" min={control.min} max={control.max} step={control.step}
            value={get(control.path, control.min)} oninput={(e) => set(control.path, Number(e.currentTarget.value))} />
-    <span class="xra-val">{get(control.path)}</span>
   {:else if control.type === 'toggle'}
     <input type="checkbox" checked={!!get(control.path)} onchange={(e) => set(control.path, e.currentTarget.checked)} />
   {:else if control.type === 'color'}
