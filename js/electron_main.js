@@ -149,6 +149,8 @@ app.on('ready', function() {
       global.is_transparent = false
     }
 
+    p = p.filter(function (a) { return !/^-/.test(a) })
+
     var wsh_index, hta_index
     wsh_index = hta_index = p.length - 1
     if (p[wsh_index] == "wsh") {
