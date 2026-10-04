@@ -11,6 +11,7 @@ export const app = $state({
   focusSection: null, // section id the left dock asked to reveal
   focusNonce: 0,      // bumped to re-trigger focus even for the same section
   popupSection: null, // section id shown as a floating popup next to the dock
+  dockExpanded: false, // left rail hover state (popup follows its right edge)
   status: {},      // live status pushed from the host
 })
 
