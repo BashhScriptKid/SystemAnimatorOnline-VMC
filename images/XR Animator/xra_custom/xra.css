@@ -73,6 +73,13 @@ html.xra-eco-mode #SL {
   z-index: 900000;
   pointer-events: none;
   overflow: hidden;
+  /* Mocap wireframe follows tracking: hidden by default (and at startup), shown
+     only while the camera/streamer runs. Classes are set by
+     applyMocapWireframeVisibility(). */
+  display: none;
+}
+body.xra-tracking-on:not(.xra-wireframe-off) #XRA_MOCAP_WIREFRAME_LAYER {
+  display: block;
 }
 
 .xra-mocap-wireframe-front {

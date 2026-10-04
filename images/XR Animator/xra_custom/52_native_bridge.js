@@ -1092,6 +1092,27 @@
     return false;
   }
 
+  // Mocap wireframe follows tracking: hidden at startup and whenever tracking
+  // is off. 'Off' (false) hides it entirely; anything else shows it only while
+  // the camera/streamer is running.
+  function wireframeShouldShow() {
+    return config.ui?.preview_wireframe !== false && !!cameraRunning();
+  }
+
+  // Apply the wireframe visibility to the native node and the XRA mocap layer.
+  // The layer's canvases are created asynchronously after MMDStarted, so this
+  // is invoked on tracking/MMD/profile events to re-assert the state.
+  function applyMocapWireframeVisibility() {
+    const show = wireframeShouldShow();
+    setPreviewVisibility('wireframe', show, { remember: false });
+    // The layer's canvas is reparented/created late; gate it with body classes
+    // (see xra.css) so it can never flash before the first apply.
+    document.body?.classList.toggle('xra-tracking-on', !!cameraRunning());
+    document.body?.classList.toggle('xra-wireframe-off', config.ui?.preview_wireframe === false);
+    return show;
+  }
+  XRA.applyMocapWireframeVisibility = applyMocapWireframeVisibility;
+
   function setNativeMocapDebug(visible, { forceRefresh = false } = {}) {
     const ml = window.MMD_SA_options?.user_camera?.ML_models;
     if (!ml) return false;
@@ -1158,9 +1179,7 @@
     const video = typeof ui.preview_video === 'boolean'
       ? ui.preview_video
       : false;
-    const wire = typeof ui.preview_wireframe === 'boolean'
-      ? ui.preview_wireframe
-      : !display?.wireframe?.hidden;
+    const wire = wireframeShouldShow();
     const debug = typeof ui.preview_debug === 'boolean'
       ? ui.preview_debug
       : false;
@@ -1672,6 +1691,15 @@
   events.on('camera-started', () => {
     if (config.ui?.preview_video === true) setWebcamPreviewVisible(true);
   });
+
+  // Mocap wireframe follows tracking: re-assert on start/stop, and again after
+  // MMDStarted (the layer canvases are created with staggered delays).
+  events.on('camera-started', applyMocapWireframeVisibility);
+  events.on('camera-stopped', applyMocapWireframeVisibility);
+  window.addEventListener('MMDStarted', () => {
+    for (const delay of [0, 300, 1000, 2200]) setTimeout(applyMocapWireframeVisibility, delay);
+  });
+  events.on('profile-loaded', () => setTimeout(applyMocapWireframeVisibility, 0));
   events.on('calibrated', dismissCalibrationNotices);
 
   events.on('profile-loaded', () => {

@@ -2,6 +2,10 @@
   import { get, set, t } from './xra.svelte.js'
   let { control } = $props()
   const opts = $derived(typeof control.options === 'function' ? control.options() : (control.options || []))
+
+  // Mocap-wireframe visibility: null/true = auto (follow tracking), false = off.
+  const tri = (v) => (v === false ? 'off' : 'auto')
+  const fromTri = (s) => (s === 'off' ? false : null)
 </script>
 
 <label class="xra-row">
@@ -9,6 +13,11 @@
   {#if control.type === 'select'}
     <select value={get(control.path)} onchange={(e) => set(control.path, e.currentTarget.value)}>
       {#each opts as o}<option value={o[0]}>{t(o[1])}</option>{/each}
+    </select>
+  {:else if control.type === 'tristate'}
+    <select value={tri(get(control.path))} onchange={(e) => set(control.path, fromTri(e.currentTarget.value))}>
+      <option value="auto">{t('Auto (follow tracking)')}</option>
+      <option value="off">{t('Off')}</option>
     </select>
   {:else if control.type === 'slider'}
     <input type="range" min={control.min} max={control.max} step={control.step}

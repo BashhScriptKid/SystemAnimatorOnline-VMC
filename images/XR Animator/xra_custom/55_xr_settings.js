@@ -729,7 +729,10 @@
 
     addToggle(box.body, 'Show mocap wireframe',
       () => XRA.nativeBridge?.getPreviewVisibility?.('wireframe') ?? !window.MMD_SA_options?.user_camera?.display?.wireframe?.hidden,
-      value => XRA.nativeBridge?.setPreviewVisibility?.('wireframe', value),
+      // Gate on tracking and don't persist: the wireframe follows tracking now
+      // (the Svelte "Mocap wireframe" control owns the on/off preference). This
+      // stops the legacy persisted left-state from forcing it on at startup.
+      value => XRA.nativeBridge?.setPreviewVisibility?.('wireframe', !!value && !!XRA.nativeBridge?.cameraRunning?.(), { remember: false }),
       'Mostra lo scheletro di tracciamento sopra la scena.');
 
     const actions = el('div', 'xra-inline-grid');

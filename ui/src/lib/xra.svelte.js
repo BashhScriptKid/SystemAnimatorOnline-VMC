@@ -44,6 +44,11 @@ function applyHook(path) {
   if (!X) return
   if (path.startsWith('background.')) { X.background?.apply?.(); return }
   if (path === 'ui.language') { X.i18n?.setLanguage?.(config.ui.language); return }
+  if (path === 'ui.preview_wireframe') {
+    // Follows tracking: shown only while the camera runs. 'Off' (false) hides it.
+    if (typeof X.applyMocapWireframeVisibility === 'function') X.applyMocapWireframeVisibility()
+    return
+  }
   if (path.startsWith('performance.')) {
     window.XRA_render_fps_limit = Number(config.performance.render_fps ?? 60)
     window.XRA_gpu_preference = String(config.performance.gpu_preference || 'default')

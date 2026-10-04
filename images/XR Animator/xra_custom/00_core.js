@@ -576,8 +576,11 @@
     // Webcam preview is rendered by XRA from the existing live MediaStream.
     // Do not map it back to XR Animator's legacy camera-display tri-state,
     // which is renderer-dependent and can be overwritten at runtime.
-    if (typeof config.ui?.preview_wireframe === 'boolean')
-      nativeConfig.user_camera.display.wireframe.hidden = !config.ui.preview_wireframe;
+    // Mocap wireframe follows tracking: hidden at startup and while tracking is
+    // off. 'Off' (false) hides it entirely; anything else shows it only while
+    // the camera/streamer is running.
+    nativeConfig.user_camera.display.wireframe.hidden =
+      !(config.ui?.preview_wireframe !== false && !!XRA.nativeBridge?.cameraRunning?.());
     if (typeof config.ui?.preview_debug === 'boolean')
       nativeConfig.user_camera.ML_models.debug_hidden = !config.ui.preview_debug;
 
