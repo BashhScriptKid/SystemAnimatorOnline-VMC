@@ -1,12 +1,13 @@
-﻿> **This is a fork — XR Animator VMC.** A downstream, VMC-focused repurposing of
+﻿> **This is a fork — XR Animator VMC.** A downstream repurposing of
 > [XR Animator / System Animator Online](https://github.com/ButzYung/SystemAnimatorOnline)
-> by **Butz Yung**. The upstream project remains the engine; this fork is a distribution that
-> pursues a different product direction. Upstream license and credits still apply — see
+> by **Butz Yung**, aimed at a lean, broadcast-ready VTuber app in the spirit of VTube Studio / Warudo.
+> The upstream project remains the engine; this fork is a distribution that pursues a different
+> product direction. Upstream license and credits still apply — see
 > [About this fork](#about-this-fork) and the sections below.
 
 # XR Animator VMC
 
-### Multi-platform external motion capture over the VMC protocol
+### A lean, broadcast-ready VTuber app — in the spirit of VTube Studio / Warudo
 
 <p align="center">
   <img width="640" height="360" title="XR Animator" src="https://github.com/ButzYung/SystemAnimatorOnline/raw/master/images/XR_Animator_thumbnail01.png">
@@ -26,11 +27,14 @@ The Windows/Linux/macOS app version (powered by [Electron](https://www.electronj
 
 # About this fork
 
-**XR Animator VMC** repurposes XR Animator into a focused, multi-platform **external motion-capture transmitter**: capture on one device and drive a model on another over the **VMC protocol** (OSC/UDP), with an optional self-renderer and a clean, frameless output for OBS.
+**XR Animator VMC** repurposes XR Animator toward a **lean, broadcast-ready VTuber app** — the kind of thing VTube Studio or Warudo do: load a model, track your face/body/hands, and drive it live on stream.
 
-- **VMC/OSC-first** — send mocap to VSeeFace / VNyan / Warudo / Unity / Unreal; receive from other sources too.
-- **Broadcast-ready by default** — a chromeless output surface, not a demo UI.
-- **Multi-platform** — desktop and mobile, with a light headless "mocap-only" mode.
+- **Self-contained avatar app, not a mocap toy** — VRM/MMD models, real tracking, a proper control panel instead of a demo overlay.
+- **Broadcast-ready by default** — a chromeless, transparent output surface for OBS (window/game capture), with the UI kept out of the way.
+- **VMC protocol compatibility (both ways)** — drive VSeeFace / VNyan / Warudo / Unity / Unreal, and be driven by other VMC sources.
+- **Multi-platform** — desktop, with mobile to follow.
+
+**Best-to-have, on top:** a standalone **external mocap transmitter** mode — capture on one device and send mocap to another (network/USB), with the self-renderer optional.
 
 ## Runtime & strategy (up front and honest)
 This fork currently runs on the **same runtime as upstream: Electron/Chromium**. Electron carries a real shell tax (install size, idle RAM, process count) that cannot be removed without leaving Chromium — and this engine is deeply coupled to its Chromium/`document.write` bootstrap, so a non-Chromium runtime means owning that bootstrap.
