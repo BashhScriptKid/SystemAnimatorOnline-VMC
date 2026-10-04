@@ -1,5 +1,6 @@
 <script>
   import { onMount } from 'svelte'
+  import Icon from './Icon.svelte'
   import { app, config, resync, t } from './xra.svelte.js'
 
   const X = () => window.XRA
@@ -157,7 +158,7 @@
     if (closing || !app.startupOpen) return
     const info = getCameraBusyInfo()
     warning = info.busy
-      ? `⚠️ Webcam in use by another application (${info.proc}). Close it to start tracking.`
+      ? `Webcam in use by another application (${info.proc}). Close it to start tracking.`
       : ''
 
     if (!isAvatarReady()) { startDisabled = true; startLabel = tr('Loading avatar…') }
@@ -301,7 +302,7 @@
             {#each cameras as c (c.deviceId)}<option value={c.deviceId}>{c.label}</option>{/each}
           {/if}
         </select>
-        <button type="button" class="action" title={tr('Refresh cameras')} aria-label={tr('Refresh cameras')} onclick={() => refreshCameras(true)} disabled={camBusy}>↻</button>
+        <button type="button" class="action" title={tr('Refresh cameras')} aria-label={tr('Refresh cameras')} onclick={() => refreshCameras(true)} disabled={camBusy}><Icon name="RefreshCw" size={14} /></button>
       </div>
       {#if warning}<div class="warn">{warning}</div>{/if}
     </section>

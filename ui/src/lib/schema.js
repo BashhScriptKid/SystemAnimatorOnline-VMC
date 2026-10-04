@@ -5,22 +5,22 @@
 // slider ranges, custom labels). SECTION_INFO renames/groups the top-level keys.
 
 export const SECTION_INFO = {
-  camera: { title: 'Camera', icon: '📷' },
-  devices: { title: 'Devices', icon: '🎛' },
-  pose_model: { title: 'Pose model', icon: '🕺' },
-  performance: { title: 'Performance', icon: '⚡' },
-  tracking: { title: 'Motion capture', icon: '🧍' },
-  body: { title: 'Body', icon: '🧍' },
-  collider: { title: 'Body collider', icon: '🛡' },
-  lip: { title: 'Audio & Lip-sync', icon: '🎙️' },
-  background: { title: 'Background', icon: '🖼' },
-  avatar: { title: 'Character position (avatar only)', icon: '🧍' },
-  second_avatar: { title: 'Remote avatar (Studio Link)', icon: '🌐' },
-  stage: { title: '3D Stage & Environment', icon: '🏛️' },
-  recorder: { title: 'Recording / capture', icon: '⏺' },
-  visual_effects: { title: 'Visual effects', icon: '✨' },
-  debug: { title: 'Diagnostics', icon: '📊' },
-  ui: { title: 'UI & overlays', icon: '🖥' }
+  camera: { title: 'Camera', icon: 'Camera' },
+  devices: { title: 'Devices', icon: 'SlidersHorizontal' },
+  pose_model: { title: 'Pose model', icon: 'PersonStanding' },
+  performance: { title: 'Performance', icon: 'Zap' },
+  tracking: { title: 'Motion capture', icon: 'Activity' },
+  body: { title: 'Body', icon: 'PersonStanding' },
+  collider: { title: 'Body collider', icon: 'Shield' },
+  lip: { title: 'Audio & Lip-sync', icon: 'Mic' },
+  background: { title: 'Background', icon: 'Image' },
+  avatar: { title: 'Character position (avatar only)', icon: 'User' },
+  second_avatar: { title: 'Remote avatar (Studio Link)', icon: 'Globe' },
+  stage: { title: '3D Stage & Environment', icon: 'Landmark' },
+  recorder: { title: 'Recording / capture', icon: 'Video' },
+  visual_effects: { title: 'Visual effects', icon: 'Sparkles' },
+  debug: { title: 'Diagnostics', icon: 'Bug' },
+  ui: { title: 'UI & overlays', icon: 'Monitor' }
 }
 
 // Sections rendered in this order; anything else follows alphabetically.

@@ -64,8 +64,17 @@ body.xra-total-clean-screen #XRA_SVELTE { display: none !important; }
 .xra-sec > summary {
   cursor: pointer; list-style: none; padding: 8px 10px;
   font-weight: 600; user-select: none;
+  display: flex; align-items: center; gap: 8px;
 }
 .xra-sec > summary::-webkit-details-marker { display: none; }
+.xra-sec-title { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: 7px; }
+.xra-sec-icon { flex: 0 0 auto; color: var(--xra-ui-dim); }
+.xra-sec-chevron {
+  flex: 0 0 auto; width: 14px; height: 14px;
+  color: var(--xra-ui-dim);
+  transition: transform .15s ease;
+}
+.xra-sec-chevron.open { transform: rotate(90deg); }
 .xra-sec-body { padding: 4px 10px 10px; }
 
 .xra-row {
