@@ -1,5 +1,6 @@
 import { mount } from 'svelte'
 import App from './App.svelte'
+import './ui.css'
 
 function boot() {
   let el = document.getElementById('XRA_SVELTE')
