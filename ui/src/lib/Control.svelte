@@ -20,9 +20,12 @@
       <option value="off">{t('Off')}</option>
     </select>
   {:else if control.type === 'slider'}
+    {@const sv = Number(get(control.path, control.min))}
+    {@const spct = control.max > control.min ? Math.round(((sv - control.min) / (control.max - control.min)) * 100) : 0}
     <span class="xra-val">{get(control.path)}</span>
     <input type="range" min={control.min} max={control.max} step={control.step}
-           value={get(control.path, control.min)} oninput={(e) => set(control.path, Number(e.currentTarget.value))} />
+           style="--xra-fill:{spct}%"
+           value={sv} oninput={(e) => set(control.path, Number(e.currentTarget.value))} />
   {:else if control.type === 'toggle'}
     <input type="checkbox" checked={!!get(control.path)} onchange={(e) => set(control.path, e.currentTarget.checked)} />
   {:else if control.type === 'color'}
