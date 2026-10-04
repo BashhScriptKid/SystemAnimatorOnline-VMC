@@ -9,6 +9,7 @@
   // Sections are keyed by id and never re-created, so capturing the initial
   // persisted value once is intended.
   let open = $state(untrack(() => get(STORE, {})?.[section.id] ?? false))
+  const searching = $derived(!!(app.search || '').trim())
   let el
 
   function toggle() {
@@ -27,7 +28,7 @@
   })
 </script>
 
-<details class="xra-sec" bind:this={el} open={open}>
+<details class="xra-sec" bind:this={el} open={open || searching}>
   <summary onclick={(e) => { e.preventDefault(); toggle() }}>
     <span class="xra-sec-title">
       <Icon name={section.icon} size={15} class="xra-sec-icon" />
@@ -37,7 +38,7 @@
       <path d="M9 6l6 6-6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
     </svg>
   </summary>
-  {#if open}
+  {#if open || searching}
     <div class="xra-sec-body">
       <SectionControls {section} />
     </div>

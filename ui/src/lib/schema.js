@@ -34,12 +34,15 @@ function humanize(s) {
   return words.charAt(0).toUpperCase() + words.slice(1)
 }
 
+// Guard sliders only apply when the guard is armed.
+const guardOn = (c) => String(c.tracking?.guard_mode || '').toLowerCase() !== 'off'
+
 // path -> control overrides
 export const OVERRIDES = {
   'ui.language': { type: 'select', options: () => (window.XRA?.i18n?.LANGUAGES || [['en', 'English']]) },
   'background.mode': { type: 'select', options: [['color', 'Color'], ['image', 'Image'], ['none', 'None (transparent · OBS)']] },
-  'background.color': { type: 'color' },
-  'background.path': { type: 'text' },
+  'background.color': { type: 'color', when: (c) => c.background?.mode === 'color' },
+  'background.path': { type: 'text', when: (c) => c.background?.mode === 'image', desc: 'Path or file name of the background image.' },
 
   'ui.mocap_view': { type: 'select', label: 'Mocap window', options: [['off', 'Off'], ['both', 'Webcam + skeleton'], ['wireframe', 'Skeleton only'], ['video', 'Webcam only']] },
   'ui.mocap_visibility': { type: 'select', label: 'Mocap window visibility', options: [['always', 'Always on (black while idle)'], ['auto', 'Auto (hide when tracking is off)']] },
@@ -59,22 +62,26 @@ export const OVERRIDES = {
   'performance.min_face_confidence': { type: 'slider', min: 0.05, max: 1, step: 0.05 },
   'performance.min_joint_confidence': { type: 'slider', min: 0.05, max: 1, step: 0.05 },
 
-  'tracking.hand_recovery_mode': { type: 'select', options: [['normal', 'Normal'], ['aggressive', 'Aggressive'], ['off', 'Off']] },
+  'tracking.hand_recovery_mode': { type: 'select', options: [['normal', 'Normal'], ['aggressive', 'Aggressive'], ['off', 'Off']], desc: 'How the backend re-acquires hands after they leave the frame.' },
   'tracking.hand_detection_sensitivity': { type: 'select', options: [['high', 'High'], ['normal', 'Normal'], ['low', 'Low']] },
-  'tracking.stabilize_hand_percent': { type: 'slider', min: 0, max: 100, step: 1 },
+
+  'tracking.stabilize_hand_percent': { type: 'slider', min: 0, max: 100, step: 1, group: 'Stabilization' },
   'tracking.stabilize_arm': { type: 'slider', min: 0, max: 100, step: 1 },
   'tracking.stabilize_arm_time': { type: 'slider', min: 0, max: 2, step: 0.05 },
-  'tracking.native_smoothing': { type: 'slider', min: 0, max: 1, step: 0.01 },
-  'tracking.body_bend_reduction': { type: 'slider', min: 0, max: 1, step: 0.01 },
-  'tracking.upper_body_guard_strength': { type: 'slider', min: 0, max: 1, step: 0.01 },
-  'tracking.guard_jump_deg': { type: 'slider', min: 5, max: 120, step: 1 },
-  'tracking.guard_hold_ms': { type: 'slider', min: 0, max: 2000, step: 10 },
-  'tracking.guard_reacquire_deg': { type: 'slider', min: 5, max: 120, step: 1 },
+  'tracking.native_smoothing': { type: 'slider', min: 0, max: 1, step: 0.01, group: 'Smoothing' },
   'tracking.adaptive_smoothing_strength': { type: 'slider', min: 0, max: 1, step: 0.01 },
-  'tracking.guard_confidence_min': { type: 'slider', min: 0, max: 1, step: 0.01 },
-  'tracking.guard_release_ms': { type: 'slider', min: 0, max: 2000, step: 10 },
-  'tracking.guard_mode': { type: 'select', options: [['off', 'Off'], ['auto', 'Auto']] },
-  'tracking.desk_torso_lock': { type: 'slider', min: 0, max: 1, step: 0.01 },
+  'tracking.body_bend_reduction': { type: 'slider', min: 0, max: 1, step: 0.01, group: 'Body' },
+
+  'tracking.upper_body_guard': { type: 'toggle', group: 'Guard', desc: 'Hold the upper body steady when tracking confidence drops.' },
+  'tracking.upper_body_guard_strength': { type: 'slider', min: 0, max: 1, step: 0.01, group: 'Guard', enabled: (c) => !!c.tracking?.upper_body_guard },
+  'tracking.guard_mode': { type: 'select', group: 'Guard', options: [['off', 'Off'], ['auto', 'Auto']], desc: 'Auto re-acquires tracking after an occlusion or a fast jump.' },
+  'tracking.guard_jump_deg': { type: 'slider', min: 5, max: 120, step: 1, enabled: guardOn, desc: 'Largest sudden joint-angle jump (deg) treated as noise.' },
+  'tracking.guard_hold_ms': { type: 'slider', min: 0, max: 2000, step: 10, enabled: guardOn, desc: 'How long to hold the pose before re-acquiring (ms).' },
+  'tracking.guard_reacquire_deg': { type: 'slider', min: 5, max: 120, step: 1, enabled: guardOn, desc: 'Angle (deg) needed to end the hold and resume tracking.' },
+  'tracking.guard_confidence_min': { type: 'slider', min: 0, max: 1, step: 0.01, enabled: guardOn },
+  'tracking.guard_release_ms': { type: 'slider', min: 0, max: 2000, step: 10, enabled: guardOn },
+
+  'tracking.desk_torso_lock': { type: 'slider', min: 0, max: 1, step: 0.01, group: 'Desk lock', desc: 'Lock torso rotation when working at a desk.' },
   'tracking.desk_hips_lock': { type: 'slider', min: 0, max: 1, step: 0.01 },
   'tracking.desk_legs_lock': { type: 'slider', min: 0, max: 1, step: 0.01 },
   'tracking.desk_max_yaw_deg': { type: 'slider', min: 0, max: 90, step: 1 },
@@ -162,7 +169,11 @@ export function buildSections(config) {
         continue
       }
       const type = ov.type || (typeof def === 'boolean' ? 'toggle' : typeof def === 'number' ? 'number' : 'text')
-      controls.push({ type, path, label: ov.label || humanize(field), min: ov.min, max: ov.max, step: ov.step, options: ov.options })
+      controls.push({
+        type, path, label: ov.label || humanize(field),
+        min: ov.min, max: ov.max, step: ov.step, options: ov.options,
+        when: ov.when, enabled: ov.enabled, group: ov.group, desc: ov.desc,
+      })
     }
     if (controls.length) sections.push({ id: key, title: info.title || humanize(key), icon: info.icon || '⚙', controls })
   }

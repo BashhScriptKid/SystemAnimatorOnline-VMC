@@ -96,7 +96,7 @@
   onpointerleave={() => { app.dockExpanded = false }}
 >
   {#each SYMLINKS as s (s.id)}
-    <button type="button" class="{BTN} {HOVER}" title={t(s.label)} onclick={() => toggleSectionPopup(s.id)}>
+    <button type="button" class="{BTN} {HOVER}" aria-label={t(s.label)} onclick={() => toggleSectionPopup(s.id)}>
       <span class="grid w-5 shrink-0 place-items-center"><Icon name={s.icon} size={16} /></span>
       <span class={LABEL}>{t(s.label)}</span>
     </button>
@@ -104,19 +104,19 @@
 
   <div class="my-1 h-px bg-white/10"></div>
 
-  <button type="button" class="{BTN} {tracking ? 'bg-emerald-500/20 hover:bg-emerald-500/30' : HOVER} {busy ? 'opacity-60' : ''}" title={t('Tracking')} onclick={toggleTracking} disabled={busy}>
+  <button type="button" class="{BTN} {tracking ? 'bg-emerald-500/20 hover:bg-emerald-500/30' : HOVER} {busy ? 'opacity-60' : ''}" aria-label={t('Tracking')} onclick={toggleTracking} disabled={busy}>
     <span class="grid w-5 shrink-0 place-items-center"><Icon name="Webcam" size={16} class={tracking ? 'text-emerald-400' : ''} /></span>
     <span class={LABEL}>{busy ? t(busyLabel) : (tracking ? t('Tracking on') : t('Tracking off'))}</span>
   </button>
-  <button type="button" class="{BTN} {recording ? 'bg-red-500/30 hover:bg-red-500/40 text-red-200' : HOVER} {recBusy ? 'opacity-60' : ''}" title={t('Record')} onclick={toggleRecording} disabled={recBusy}>
+  <button type="button" class="{BTN} {recording ? 'bg-red-500/30 hover:bg-red-500/40 text-red-200' : HOVER} {recBusy ? 'opacity-60' : ''}" aria-label={t('Record')} onclick={toggleRecording} disabled={recBusy}>
     <span class="grid w-5 shrink-0 place-items-center"><Icon name={recBusy ? 'Circle' : (recording ? 'Square' : 'Circle')} size={16} class={recording ? 'text-red-400' : ''} /></span>
     <span class={LABEL}>{recBusy ? t(recBusyLabel) : (recording ? t('Stop recording') : t('Record'))}</span>
   </button>
-  <button type="button" class="{BTN} {HOVER}" title={t('Load / change VRM…')} onclick={pickVrm}>
+  <button type="button" class="{BTN} {HOVER}" aria-label={t('Load / change VRM…')} onclick={pickVrm}>
     <span class="grid w-5 shrink-0 place-items-center"><Icon name="FolderOpen" size={16} /></span>
     <span class={LABEL}>{t('Load / change VRM…')}</span>
   </button>
-  <button type="button" class="{BTN} {HOVER}" title={t('About')} onclick={about}>
+  <button type="button" class="{BTN} {HOVER}" aria-label={t('About')} onclick={about}>
     <span class="grid w-5 shrink-0 place-items-center"><Icon name="Info" size={16} /></span>
     <span class={LABEL}>{t('About')}</span>
   </button>

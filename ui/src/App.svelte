@@ -34,6 +34,10 @@
       <button title="{window.XRA?.i18n?.t?.('Clean screen mode (Press Esc to restore)') || 'Clean screen (Esc)'}" onclick={toggleClean}><Icon name="EyeOff" size={15} /></button>
       <button title="Close panel" onclick={() => app.panelOpen = false}><Icon name="X" size={15} /></button>
     </header>
+    <div class="xra-panel-search">
+      <input type="search" placeholder="Search settings…" value={app.search}
+             oninput={(e) => app.search = e.currentTarget.value} />
+    </div>
     <div class="xra-panel-body">
       {#each sections as s (s.id)}<Section section={s} />{/each}
     </div>
