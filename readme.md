@@ -1,6 +1,9 @@
 ﻿> **This is a fork — XR Animator VMC.** A downstream repurposing of
 > [XR Animator / System Animator Online](https://github.com/ButzYung/SystemAnimatorOnline)
 > by **Butz Yung**, aimed at a lean, broadcast-ready VTuber app in the spirit of VTube Studio / Warudo.
+> It also **absorbs, once and with explicit credit**, work from the
+> [XR Animator — Podcasters Edition](https://github.com/Thatisjigen/XR_Animator_Podcasters) fork by **thatisjigen**
+> (see [Credits & derived work](#credits--derived-work)).
 > The upstream project remains the engine; this fork is a distribution that pursues a different
 > product direction. Upstream license and credits still apply — see
 > [About this fork](#about-this-fork) and the sections below.
@@ -49,7 +52,19 @@ The strategy is therefore deliberate:
 Early, work in progress. Interfaces and behavior may change.
 
 ## Credits & derived work
-This fork **absorbs once** work from the **XR Animator — Podcasters Edition** fork by **thatisjigen** ([repo](https://github.com/Thatisjigen/XR_Animator_Podcasters)), under the same CC BY-NC-SA 4.0 license. That includes, among others: a **native Python MediaPipe backend** (`xra_backends/`, `xr_server.py`, `xr_launcher.py`), the **WebSocket inference bridge** (`js/xra_backend_bridge.js`), Linux/Wayland and OBS improvements, and studio features (3D props, stages, audio, recorder, control panel). Authorship of those parts belongs to that fork — see its repository. Upstream **XR Animator** by **Butz Yung** remains the foundation, and all upstream license/credits below still apply.
+
+**Upstream — the foundation.** [XR Animator / System Animator Online](https://github.com/ButzYung/SystemAnimatorOnline) by **Butz Yung** (Anime Theme). All upstream credits, license terms, and donation links below are preserved.
+
+**Absorbed once — explicit credit.** This fork incorporates work from **XR Animator — Podcasters Edition** by **thatisjigen** ([github.com/Thatisjigen/XR_Animator_Podcasters](https://github.com/Thatisjigen/XR_Animator_Podcasters), branch `native_mediapipe`), used under the same **CC BY-NC-SA 4.0** license. That work — authored by thatisjigen, not by this fork — includes:
+
+- **Native Python MediaPipe backend:** `xra_backends/` (`native_mediapipe.py`, `capture.py`, `engine.py`, `server.py`, `object_detector.py`, `provision.py`, `registry.py`, `downloader.py`), plus `xr_server.py` and `xr_launcher.py`
+- **WebSocket inference bridge:** `js/xra_backend_bridge.js`
+- **Modular UI layer:** `images/XR Animator/xra_custom/*`
+- **Platform work:** Linux/Wayland, OBS integration, and thermal-management improvements
+- **Studio features:** 3D props, 3D stages, audio/lip-sync, local recorder, control panel
+- **Packaging & tooling:** `build.sh`, `tools/`, `packaging/`, prop/stage assets, and tests
+
+Authorship of all of the above belongs to **thatisjigen** — see that repository for its own credits and history. This fork's original contributions (the `SA_bridge` host layer and related migration work) are layered on top; this fork is a downstream distribution and claims **no authorship** of the absorbed work.
 
 # Features
 
