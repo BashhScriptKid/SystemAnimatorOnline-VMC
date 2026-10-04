@@ -68,6 +68,14 @@ Early, work in progress. Interfaces and behavior may change.
 
 Authorship of all of the above belongs to **thatisjigen** — see that repository for its own credits and history. This fork's original contributions (the `SA_bridge` host layer and related migration work) are layered on top; this fork is a downstream distribution and claims **no authorship** of the absorbed work.
 
+**ONNX Runtime backend (in progress).** The native inference path is being extended with an **optional ONNX Runtime backend** that runs MediaPipe-equivalent models (same landmark contract). The runtime and converted models are third-party work, credited here — **models are downloaded at runtime, not bundled, and each retains its own license** (see the linked repos):
+
+- **[ONNX Runtime](https://github.com/microsoft/onnxruntime)** — MIT. Inference engine and execution providers.
+- **[OpenCV Zoo](https://github.com/opencv/opencv_zoo)** — Apache-2.0. TFLite→ONNX conversions of **MediaPipe Pose** (`pose_estimation_mediapipe`) and the person detector used for the pose ROI.
+- **[yakhyo](https://github.com/yakhyo)** — `mediapipe-face-mesh-onnx` and `mediapipe-hand-landmark-onnx`, MIT. ONNX ports of **MediaPipe Face Detection / Face Mesh** and **Palm Detection / Hand Landmark** (weights converted from MediaPipe, attributed upstream to [PINTO0309](https://github.com/PINTO0309)).
+- **Blendshape model** — [py-feat](https://github.com/cosanlab/py-feat) / [PINTO0309](https://github.com/PINTO0309) conversions of MediaPipe's face-blendshape model.
+- **[Google MediaPipe](https://github.com/google/mediapipe)** — Apache-2.0. Original model architectures and weights.
+
 # Features
 
 - Support full-body AI motion tracking using a single webcam or media file (image/video)
@@ -198,6 +206,8 @@ All demos support the use of custom MMD (MikuMikuDance) model. Drop a zip of you
 - [JSZip](https://stuk.github.io/jszip/) (used under MIT license)
 
 - [MediaPipe](https://github.com/google/mediapipe)
+
+- [ONNX Runtime](https://github.com/microsoft/onnxruntime) (used under MIT license)
 
 - [Transformers.js](https://github.com/huggingface/transformers.js)
 
