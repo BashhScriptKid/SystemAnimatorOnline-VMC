@@ -1111,10 +1111,12 @@
 
   function applyMocapWireframeVisibility() {
     const windowed = mocapWindowActive();
-    // The on-stage mocap overlay is retired: the mocap view now lives only in
-    // the movable window. Keep the layer hidden so tracking never paints the
-    // skeleton over the stage (even with the window off).
-    setPreviewVisibility('wireframe', false, { remember: false });
+    // The skeleton canvases must be RENDERABLE (like the old on-stage overlay
+    // did when tracking): reveal them when the window owns the view. When the
+    // window is off, hide them. On-stage suppression is handled separately by
+    // reparenting the layer into the window and by the layer CSS, not by
+    // hiding the canvases.
+    setPreviewVisibility('wireframe', !!windowed, { remember: false });
     document.body?.classList.remove('xra-tracking-on');
     document.body?.classList.add('xra-wireframe-off');
     if (windowed) {
