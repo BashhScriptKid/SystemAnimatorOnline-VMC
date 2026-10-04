@@ -392,17 +392,13 @@ function electronRegisterCheck() {
     return !!SA_protocol_registered;
   }
   else if (linux_mode) {
-    const SA_link = SA_require('process').env.HOME + "/Documents/system-animator";
-    if (FSO_OBJ.FileExists(SA_link)) {
-      const result = SA_require('fs').readlinkSync(SA_link);
+    const result = SA_linux_link_target;
 //      const result = SA_require('child_process').execSync('readlink -f ' + SA_link);
-      return (result && (webkit_path.indexOf(result.toString().replace(/\s+$/, "")) == 0));
-    }
-    return false;
+    return (result && (webkit_path.indexOf(result.toString().replace(/\s+$/, "")) == 0));
   }
 }
 
-function createAnimationShortcut(animation_path, no_alert) {
+async function createAnimationShortcut(animation_path, no_alert) {
   const alert_msg = 'NOTE: You have not registered System Animator to the OS. The current Electron path will be used to create the animation shortcut, which may become broken whenever Electron is upgraded in the future. Registration ensures that all animation shortcuts will remain valid as long as you register System Animator again whenever you upgrade Electron.\n\nTo register System Animator, go to the "Mode" tab and click the corresponding button.';
 
   const win = self.parent_window || self;
@@ -439,9 +435,8 @@ function createAnimationShortcut(animation_path, no_alert) {
 //console.log(data)
     let shortcut_path = SA_require('process').env.HOME + "/Desktop/" + script_name + ".desktop";
 
-    const fs = SA_require('fs');
 // use parseInt to avoid problems for older browsers (0o777)
-    fs.writeFileSync(shortcut_path, data.join("\n"), {mode: parseInt("777",8)});
+    await SA_bridge.fs.writeFile(shortcut_path, data.join("\n"), {mode: parseInt("777",8)});
 
     return;
   }
