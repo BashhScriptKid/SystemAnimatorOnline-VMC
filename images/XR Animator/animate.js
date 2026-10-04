@@ -10415,7 +10415,7 @@ MMD_SA_options.Dungeon.utils.tooltip(
    ,{ key:7, event_id:{ func:()=>{
 var url = 'https://skybox.blockadelabs.com/';
 if (webkit_electron_mode)
-  webkit_electron_remote.shell.openExternal(url)
+  SA_bridge.shell.openExternal(url)
 else
   window.open(url)
       }, goto_branch:done_branch }
@@ -10504,7 +10504,7 @@ MMD_SA_options.Dungeon.utils.tooltip(
     { key:'H', event_id:{ func:()=>{
 var url = 'https://polyhaven.com/hdris';
 if (webkit_electron_mode)
-  webkit_electron_remote.shell.openExternal(url)
+  SA_bridge.shell.openExternal(url)
 else
   window.open(url)
         },
@@ -10759,7 +10759,7 @@ MMD_SA_options.Dungeon.para_by_grid_id[2].ground_y = explorer_ground_y;
         func: function () {
 var url = 'https://youtube.com/playlist?list=PLLpwhHMvOCSt3i7NQcyJq1fFhoMiSmm5H'
 if (webkit_electron_mode)
-  webkit_electron_remote.shell.openExternal(url)
+  SA_bridge.shell.openExternal(url)
 else
   window.open(url)
         }
@@ -10770,7 +10770,7 @@ else
         func: function () {
 var url = self._readme_url_ || 'https://github.com/ButzYung/SystemAnimatorOnline#readme'; //System.Gadget.path + '/readme.txt'
 if (webkit_electron_mode)
-  webkit_electron_remote.shell.openExternal(url)
+  SA_bridge.shell.openExternal(url)
 else
   window.open(url)
         }
@@ -10781,7 +10781,7 @@ else
         func:()=>{
 var url = 'https://github.com/ButzYung/SystemAnimatorOnline/releases'
 if (webkit_electron_mode)
-  webkit_electron_remote.shell.openExternal(url)
+  SA_bridge.shell.openExternal(url)
 else
   window.open(url)
         }
@@ -10792,7 +10792,7 @@ else
         func:()=>{
 var url = 'https://ko-fi.com/butzyung/shop'
 if (webkit_electron_mode)
-  webkit_electron_remote.shell.openExternal(url)
+  SA_bridge.shell.openExternal(url)
 else
   window.open(url)
         }
@@ -10804,7 +10804,7 @@ else
         func:()=>{
 var url = 'https://github.com/ButzYung/SystemAnimatorOnline#contacts'
 if (webkit_electron_mode)
-  webkit_electron_remote.shell.openExternal(url)
+  SA_bridge.shell.openExternal(url)
 else
   window.open(url)
         }
@@ -10824,7 +10824,7 @@ else
         func:()=>{
 var url = (System._browser.translation.language == 'ja') ? 'https://xra.fanbox.cc/' : 'https://ko-fi.com/butzyung';
 if (webkit_electron_mode)
-  webkit_electron_remote.shell.openExternal(url)
+  SA_bridge.shell.openExternal(url)
 else
   window.open(url)
         }
@@ -10835,7 +10835,7 @@ else
         func:()=>{
 var url = 'https://www.paypal.me/AnimeThemeGadgets'
 if (webkit_electron_mode)
-  webkit_electron_remote.shell.openExternal(url)
+  SA_bridge.shell.openExternal(url)
 else
   window.open(url)
         }
@@ -13388,7 +13388,7 @@ MMD_SA_options.Dungeon.utils.tooltip(
       func:()=>{
 var url = 'https://ko-fi.com/s/eae52effa9'
 if (webkit_electron_mode)
-  webkit_electron_remote.shell.openExternal(url)
+  SA_bridge.shell.openExternal(url)
 else
   window.open(url)
       },

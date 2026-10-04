@@ -458,7 +458,7 @@ if ((target.tagName != "A") && target.parentElement)
 
 if ((target.tagName == "A") && !target.onclick) {
   if (webkit_electron_mode) {
-    webkit_electron_remote.shell.openExternal(target.href)
+    SA_bridge.shell.openExternal(target.href)
     e.preventDefault()
     e.stopPropagation()
   }
