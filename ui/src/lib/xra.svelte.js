@@ -7,6 +7,7 @@ export const app = $state({
   cleanScreen: false,
   panelOpen: true,
   settingsOpen: false,
+  startupOpen: true, // Svelte-owned boot overlay (replaces legacy 60_startup)
   status: {},      // live status pushed from the host
 })
 
@@ -66,6 +67,12 @@ export function toggleClean() {
   app.cleanScreen = !app.cleanScreen
   document.body.classList.toggle('xra-total-clean-screen', app.cleanScreen)
   try { window.XRA?.ui?.setHidden?.(app.cleanScreen) } catch (e) {}
+}
+
+// Re-copy host config after code paths that mutate window.XRA.config directly
+// (e.g. the startup preset benchmark) so the Svelte tree stays in sync.
+export function resync() {
+  try { Object.assign(config, deepCopy(window.XRA?.config || {})) } catch (e) {}
 }
 
 export function refreshStatus() {

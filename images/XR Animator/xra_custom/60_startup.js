@@ -32,6 +32,9 @@
   }
 
   function createOverlay() {
+    // The Svelte control surface owns the boot overlay now (ui/src/lib/Startup.svelte).
+    // Keep this legacy overlay as a fallback for when the Svelte bundle is absent.
+    if (window.XRA_SVELTE_UI) return;
     if (document.querySelector('[data-xra-startup]')) return;
 
     const tr = source => XRA.i18n?.t?.(source) || source;
