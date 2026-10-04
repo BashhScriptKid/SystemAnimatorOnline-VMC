@@ -358,11 +358,11 @@
   .brand { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
   .logo {
     display: grid; place-items: center; width: 34px; height: 34px;
-    border: 2px solid #2f9e7a; border-radius: 7px;
-    color: #2f9e7a; font-weight: 800; font-size: 15px; letter-spacing: .5px;
+    border: 2px solid var(--xra-ui-accent); border-radius: 7px;
+    color: var(--xra-ui-accent); font-weight: 800; font-size: 15px; letter-spacing: .5px;
   }
   .name { font-size: 20px; font-weight: 600; }
-  .name b { color: #2f9e7a; }
+  .name b { color: var(--xra-ui-accent); }
   .sub { color: #9aa3ad; font-size: 11px; margin-bottom: 10px; }
 
   .log {
@@ -393,8 +393,8 @@
   }
   .q:hover { background: rgba(255, 255, 255, .1); }
   .q:disabled { opacity: .5; cursor: default; }
-  .q.primary { background: #2f9e7a; border-color: #2f9e7a; color: #fff; font-weight: 700; }
-  .q.primary:hover { background: #34b088; }
+  .q.primary { background: var(--xra-ui-accent); border-color: var(--xra-ui-accent); color: #06231a; font-weight: 700; }
+  .q.primary:hover { background: #46e9b0; }
   .q.ghost { color: #9aa3ad; }
   .q.icon { width: 34px; flex: 0 0 34px; justify-content: center; padding: 8px 0; }
   .row { display: grid; grid-template-columns: minmax(0, 1fr) 34px; gap: 6px; }

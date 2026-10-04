@@ -23,9 +23,12 @@
     {@const sv = Number(get(control.path, control.min))}
     {@const spct = control.max > control.min ? Math.round(((sv - control.min) / (control.max - control.min)) * 100) : 0}
     <span class="xra-val">{get(control.path)}</span>
-    <input type="range" min={control.min} max={control.max} step={control.step}
-           style="--xra-fill:{spct}%"
-           value={sv} oninput={(e) => set(control.path, Number(e.currentTarget.value))} />
+    <div class="xra-meter-wrap">
+      <div class="xra-meter" style="--xra-fill:{spct}%"></div>
+      <input class="xra-meter-input" type="range" min={control.min} max={control.max} step={control.step}
+             value={sv} oninput={(e) => set(control.path, Number(e.currentTarget.value))} />
+    </div>
+    <div class="xra-meter-scale"><span>{control.min}</span><span>{control.max}</span></div>
   {:else if control.type === 'toggle'}
     <input type="checkbox" checked={!!get(control.path)} onchange={(e) => set(control.path, e.currentTarget.checked)} />
   {:else if control.type === 'color'}

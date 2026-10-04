@@ -30,9 +30,9 @@
   style="left:{app.dockExpanded ? 248 : 62}px;"
   bind:this={el}
 >
-  <header class="flex shrink-0 items-center gap-2 border-b border-white/10 bg-[var(--xra-ui-bg2)] px-3 py-2">
-    <Icon name={section.icon} size={15} class="text-[var(--xra-ui-dim)]" />
-    <span class="text-[12.5px] font-semibold">{t(section.title)}</span>
+  <header class="flex shrink-0 items-center gap-2 bg-[var(--xra-ui-bg2)] px-3 py-2 shadow-[inset_0_-1px_0_var(--xra-ui-accent-soft)]">
+    <Icon name={section.icon} size={14} class="text-[var(--xra-ui-dim)]" />
+    <span class="font-mono text-[11px] font-semibold uppercase tracking-[0.12em] text-[#a9bcb8]">{t(section.title)}</span>
   </header>
   <div class="min-h-0 flex-1 overflow-auto px-2.5 py-2">
     <SectionControls {section} />
