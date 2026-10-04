@@ -4737,7 +4737,25 @@
     "caricamento modello…": "loading model…",
     "connessione…": "connecting…",
     "È la sensibilità nativa webcam; non sostituisce il nostro lip-sync microfono.": "Native webcam sensitivity; does not replace our microphone lip-sync.",
-    "↺ Ripristina stage e inquadratura": "↺ Reset stage and framing"
+    "↺ Ripristina stage e inquadratura": "↺ Reset stage and framing",
+    " (Consigliata · 30 FPS fluidi)": " (Recommended · 30 FPS smooth)",
+    " (Formato standard 4:3)": " (Standard 4:3 format)",
+    " (HD 720p · Alta precisione)": " (HD 720p · High precision)",
+    "1280×720 (HD 720p · Alta precisione)": "1280×720 (HD 720p · High precision)",
+    "20 Hz (Risparmio CPU)": "20 Hz (CPU saving)",
+    "24 Hz (Bilanciato)": "24 Hz (Balanced)",
+    "424×240 (Massimo risparmio CPU · Sistemi leggeri)": "424×240 (Max CPU saving · Light systems)",
+    "640×360 (Consigliata · 30 FPS fluidi)": "640×360 (Recommended · 30 FPS smooth)",
+    "640×480 (Formato standard 4:3)": "640×480 (Standard 4:3 format)",
+    "Backend: MediaPipe (built-in, WASM) — attivo": "Backend: MediaPipe (built-in, WASM) — active",
+    "Best (alta precisione)": "Best (high precision)",
+    "Face tracking attivo": "Face tracking active",
+    "I parametri di configurazione avanzata sono modificabili direttamente nell’editor JSON in fondo al pannello.": "Advanced configuration parameters can be edited directly in the JSON editor at the bottom of the panel.",
+    "Nativa (uguale alla webcam)": "Native (same as webcam)",
+    "Normal (bilanciato)": "Normal (balanced)",
+    "Vincola MediaPipe ai core ad alte prestazioni su Linux, eliminando jitter.": "Pins MediaPipe to high-performance cores on Linux, eliminating jitter.",
+    "⚙ IMPOSTAZIONI XRP": "⚙ XR SETTINGS",
+    "📹 Webcam / media": "📹 Webcam / media"
   });
 
   function systemLanguage() {
