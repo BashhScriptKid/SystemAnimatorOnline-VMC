@@ -294,7 +294,10 @@
       preview_wireframe: null,
       preview_debug: null,
       // Movable/resizable mocap window. mocap_view: off | both | wireframe | video.
+      // mocap_visibility: 'always' (implicit; show black + "Tracking is off"
+      // when idle) | 'auto' (hide the window entirely while tracking is off).
       mocap_view: 'off',
+      mocap_visibility: 'always',
       mocap_window: { x: 48, y: 96, w: 360, h: 270 }
     }
   };

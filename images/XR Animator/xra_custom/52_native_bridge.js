@@ -1225,7 +1225,8 @@
       if (node.dataset) node.dataset.xraMocapLayoutReady = '1';
     }
 
-    const wantsVideo = config.ui?.mocap_view === 'both' || config.ui?.mocap_view === 'video';
+    const running = !!cameraRunning();
+    const mode = config.ui?.mocap_view;
     // The browser "webcam" video is a synthetic placeholder in native mode;
     // never show it in the window. Use the real MJPEG camera pipe instead.
     const video = webcamPreviewNode();
@@ -1237,6 +1238,21 @@
       mocapCamImg.alt = '';
     }
     if (mocapCamImg.parentElement !== mocapStage) mocapStage.prepend(mocapCamImg);
+
+    if (!running) {
+      // Idle: flush the retained frame (privacy/safety) — stop the piped
+      // stream, clear the canvas buffers and hide the camera image. An
+      // always-on window paints black + "Tracking is off" over this.
+      if (mocapCamPreviewOn) { mocapCamPreviewOn = false; setMocapCameraPreview(false); }
+      try { mocapCamImg.src = ''; } catch (e) {}
+      mocapCamImg.style.setProperty('display', 'none', 'important');
+      for (const node of overlayCanvasCandidates('wireframe')) {
+        try { node.getContext?.('2d')?.clearRect(0, 0, node.width, node.height); } catch (e) {}
+      }
+      return;
+    }
+
+    const wantsVideo = mode === 'both' || mode === 'video';
     if (wantsVideo) {
       mocapCamImg.style.setProperty('position', 'absolute', 'important');
       mocapCamImg.style.setProperty('left', vr.x + 'px', 'important');
