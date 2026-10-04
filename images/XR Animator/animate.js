@@ -3492,7 +3492,7 @@ wireframe:{
 
  ,light_position: [0,1,0]
 
- ,use_shadowMap: true
+  ,use_shadowMap: false
 // ,shadow_darkness: 0.1
  ,ground_shadow_only: true
 
@@ -3530,7 +3530,7 @@ wireframe:{
 
 //    use_VRM1: false,
 
-    use_OutlineEffect: true,
+    use_OutlineEffect: false,
 
 //    model_path: 'C:\\Users\\user\\Downloads\\EL-Pr213-BosaHair\\EL-Pr213-BosaHair\\ボサ髪_v01.pmx'//'C:\\Users\\user\\Downloads\\iroha+kazama+v1.0\\iroha kazama v1.0\\model\\iroha kazama ver1.0.pmx'//System.Gadget.path + '/TEMP/DEMO/models/AvatarSample_A.vrm'
 
@@ -6450,16 +6450,8 @@ MMD_SA_options.Dungeon.utils.tooltip(
 );
       }
     }
-   ,{ key:6, branch_index:6,
-      onmouseover: function (e) {
-MMD_SA_options.Dungeon.utils.tooltip(
-  e.clientX, e.clientY,
-  System._browser.translation.get('XR_Animator.UI.motion_capture.ML_off.full_body_legacy_holistic.tooltip')
-);
-      }
-    }
-   ,{ key:7, branch_index:7 }
-   ,{ key:8, is_closing_event:true }
+   ,{ key:6, branch_index:7 }
+   ,{ key:7, is_closing_event:true }
 ];
   }
           }
@@ -6515,7 +6507,7 @@ System._browser.camera.streamer_mode.init_mocap('Full Body');
      ,[
         {
           func: function () {
-System._browser.camera.streamer_mode.init_mocap('Full Body Holistic');
+System._browser.camera.streamer_mode.init_mocap('Full Body');
           }
          ,ended: true
         }

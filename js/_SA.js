@@ -1,7 +1,6 @@
 /*
 
-_SA.js
-// (2025-08-24)
+_SA.js (2025-02-22)
 
 System Animator
 (c) Butz Yung / Anime Theme. All rights reserved.
@@ -104,7 +103,10 @@ catch (err) {
   if (!is_SA_child_animation) {
     if (use_RAF) {
       DEBUG_show('Use "requestAnimationFrame"', 2)
-      setTimeout('RAF_timerID = requestAnimationFrame(Animate_RAF)', 200)
+      setTimeout(function() {
+        _SA_ensure_heartbeat()
+        _SA_schedule_render()
+      }, 200)
     }
     else {
       Seq.item("Animate").At(0.2, "Animate", -1, 0.1/EV_sync_update.count_to_10fps)
@@ -253,22 +255,20 @@ if (is_SA_child_animation) {
   return
 }
 
-if (is_mobile && (is_SA_child_animation_host || self.MMD_SA)) {
-  LbuttonFullscreen.style.visibility = "hidden"
-  LbuttonRestore.style.visibility = "inherit"
-// Some browsers (e.g. Safari) does not return promise for requestFullscreen. Use await instead of then().
-  await document.documentElement.requestFullscreen()
-  DEBUG_show('Fullscreen:ON',2)
-  return
+if (typeof nw !== 'undefined' && nw?.Window?.get) {
+  try {
+    nw.Window.get().toggleFullscreen();
+    event.stopPropagation();
+    return;
+  } catch (_) {}
 }
 
-System.Gadget.Settings.writeString("CSSTransformFullscreen", "non_default")
-Settings.CSSTransformFullscreen = true
-SA_zoom = 1
-
-resize(null,null,null, true)
-
-event.stopPropagation()
+if (!document.fullscreenElement) {
+  await (document.documentElement.requestFullscreen || document.documentElement.webkitRequestFullscreen)?.call(document.documentElement).catch(() => {});
+} else {
+  await (document.exitFullscreen || document.webkitExitFullscreen)?.call(document).catch(() => {});
+}
+event.stopPropagation();
     }, true)
 
     LbuttonRestore.addEventListener("click", function (event) {
@@ -312,7 +312,7 @@ if (is_SA_child_animation) {
 
 if (webkit_mode) {
   try {
-    SA_bridge.window.minimize()
+    webkit_window.minimize()
   }
   catch (err) {}
 }
@@ -612,13 +612,14 @@ function SA_OnDocument() {
   if (0&&webkit_electron_mode) {
 // https://github.com/electron/electron/blob/master/docs/api/dialog.md
     try {
-      SA_bridge.window.setAlwaysOnTop(false)
+      webkit_window.setAlwaysOnTop(false)
     }
     catch (err) {}
 
-    SA_bridge.dialog.open({title:"Choose an input file."}).then(function (v) {
+    webkit_electron_dialog.showOpenDialog(null, {title:"Choose an input file."}
+,function (v) {
   try {
-    SA_bridge.window.setAlwaysOnTop(returnBoolean("AutoItAlwaysOnTop"))
+    webkit_window.setAlwaysOnTop(returnBoolean("AutoItAlwaysOnTop"))
   }
   catch (err) {}
 
@@ -652,13 +653,14 @@ function SA_OnFolder(info) {
   if (webkit_electron_mode) {
 // https://github.com/electron/electron/blob/master/docs/api/dialog.md
     try {
-      SA_bridge.window.setAlwaysOnTop(false)
+      webkit_window.setAlwaysOnTop(false)
     }
     catch (err) {}
 
-    SA_bridge.dialog.open({title:info, properties:["openDirectory"]}).then(function (v) {
+    webkit_electron_dialog.showOpenDialog(null, {title:info, properties:["openDirectory"]}
+,function (v) {
   try {
-    SA_bridge.window.setAlwaysOnTop(returnBoolean("AutoItAlwaysOnTop"))
+    webkit_window.setAlwaysOnTop(returnBoolean("AutoItAlwaysOnTop"))
   }
   catch (err) {}
 
@@ -870,8 +872,8 @@ return function (event, enforced) {
       try {
         if (p_win.returnBoolean("AutoItStayOnDesktop") && !WallpaperEngine_mode)
           WebKit_object.stay_on_desktop(!p_win.webkit_IgnoreMouseEvents_disabled)
-        SA_bridge.window.setIgnoreMouseEvents(!p_win.webkit_IgnoreMouseEvents_disabled)
-        SA_bridge.window.setFocusable(p_win.webkit_IgnoreMouseEvents_disabled)
+        webkit_window.setIgnoreMouseEvents(!p_win.webkit_IgnoreMouseEvents_disabled)
+        webkit_window.setFocusable(p_win.webkit_IgnoreMouseEvents_disabled)
       }
       catch (err) {}
 
@@ -1130,7 +1132,7 @@ function DragDrop_install(item) {
   SA_Reload_PRE(path, path_folder)
 }
 
-async function SA_Reload_PRE(path, path_folder, restart_app) {
+function SA_Reload_PRE(path, path_folder, restart_app) {
   var path_to_launch = (webkit_mode) ? path : path_folder
   if (use_SA_browser_mode && !is_SA_child_animation) {
     if (SA_top_window.is_SA_hosted) {
@@ -1161,8 +1163,13 @@ else {
 if (SystemEXT.enforce_WSH)
   args.push("wsh")
 
+if (typeof _SA_stop_bg_worker === 'function')
+  _SA_stop_bg_worker()
 if (RAF_timerID) {
-  cancelAnimationFrame(RAF_timerID)
+  if (RAF_is_timeout)
+    clearTimeout(RAF_timerID)
+  else
+    cancelAnimationFrame(RAF_timerID)
   RAF_timerID = null
 }
 
@@ -1172,7 +1179,8 @@ if (!self.oHTA) {
       restart_app = true
 
     if (WallpaperEngine_mode) {
-      await SA_bridge.fs.writeFile(System.Gadget.path + '\\TEMP\\animation_path_default.txt', path_demo_by_url[path_to_launch]||path_to_launch)
+      const fs = SA_require('fs')
+      fs.writeFileSync(System.Gadget.path + '\\TEMP\\animation_path_default.txt', path_demo_by_url[path_to_launch]||path_to_launch)
     }
 
 // a workaround for perfmon, to avoid errors on main process when reloading window to restart.
@@ -1685,7 +1693,7 @@ if (_delayed_properties) {
 
 
   if (webkit_electron_mode) {
-    setTimeout(function () { SA_bridge.window.show() }, 1000)
+    setTimeout(function () { webkit_window.show() }, 1000)
   }
 
 // not needed in Electron anymore I suppose
@@ -2623,43 +2631,318 @@ this.count_to_10fps_ = v
 
 var use_RAF = !!window.requestAnimationFrame
 var RAF_timerID = null
+var RAF_is_timeout = false
 var RAF_timestamp = 0
 var RAF_timestamp_delta = 0
 var RAF_timestamp_delta_accumulated = 0
 var RAF_frame_time_delayed = 0
 var RAF_frame_drop = 0
 
-var Animate_RAF = function (timestamp) {
-//EV_sync_update.fps_count_func()
+var _SA_bg_worker = null
+var _SA_last_anim_time = (typeof performance !== 'undefined' ? performance.now() : Date.now())
+var _SA_raf_stalled = false
+var _SA_worker_active = false
+var _SA_worker_interval = 0
+var _SA_heartbeat_busy = false
+var _SA_fallback_timer = null
+var _SA_raf_generation = 0
+
+function _SA_is_foreground_active() {
+  if (typeof document === 'undefined') return true
+  if (document.hidden) return false
+  return (typeof document.hasFocus !== 'function') || document.hasFocus()
+}
+
+function _SA_cancel_pending_raf() {
+  // Invalidate the callback even when the browser has already dequeued it and
+  // cancelAnimationFrame can no longer prevent its delivery.
+  _SA_raf_generation++
+  if (!RAF_timerID) return
+  if (RAF_is_timeout)
+    clearTimeout(RAF_timerID)
+  else
+    cancelAnimationFrame(RAF_timerID)
+  RAF_timerID = null
+}
+
+function _SA_on_raf_frame(timestamp) {
+  RAF_timerID = null
+  var now = (typeof performance !== 'undefined' ? performance.now() : Date.now())
+  var target_fps = (Number.isFinite(window.XRA_render_fps_limit) && window.XRA_render_fps_limit > 0)
+    ? window.XRA_render_fps_limit
+    : (window.XRA_render_fps_limit === 0 ? 120 : 60)
+  var target_interval = 1000 / target_fps
+
+  // If window is unfocused or occluded in background, switch to timer ticker
+  if (!_SA_is_foreground_active()) {
+    _SA_raf_stalled = true
+    _SA_cancel_pending_raf()
+    _SA_schedule_render()
+    return
+  }
+  if (RAF_timestamp && timestamp <= RAF_timestamp)
+    timestamp = Math.max(now, RAF_timestamp + 0.01)
+  _SA_raf_stalled = false
+  Animate_RAF(timestamp, false)
+}
+
+function _SA_schedule_render() {
+  if (!use_RAF || !EV_sync_update.requestAnimationFrame_auto || EV_sync_update.RAF_paused) {
+    _SA_cancel_pending_raf()
+    return false
+  }
+  _SA_ensure_heartbeat()
+
+  var target_fps = (Number.isFinite(window.XRA_render_fps_limit) && window.XRA_render_fps_limit > 0)
+    ? window.XRA_render_fps_limit
+    : (window.XRA_render_fps_limit === 0 ? 120 : 60)
+  var target_interval = 1000 / target_fps
+
+  if (_SA_is_foreground_active() && !_SA_raf_stalled) {
+    if (RAF_is_timeout) {
+      _SA_cancel_pending_raf()
+    }
+    RAF_is_timeout = false
+    var generation = ++_SA_raf_generation
+    RAF_timerID = requestAnimationFrame(function(timestamp) {
+      if (generation !== _SA_raf_generation) return
+      _SA_on_raf_frame(timestamp)
+    })
+  } else {
+    // OUT OF VIEW / BACKGROUND / STALLED: pass to timer RAF (ticker)
+    if (!RAF_is_timeout) {
+      _SA_cancel_pending_raf()
+    }
+    RAF_is_timeout = true
+    var generation = ++_SA_raf_generation
+    RAF_timerID = setTimeout(function() {
+      if (generation !== _SA_raf_generation) return
+      RAF_timerID = null
+      var now = (typeof performance !== 'undefined' ? performance.now() : Date.now())
+      Animate_RAF(now, false)
+    }, Math.max(4, Math.floor(target_interval)))
+  }
+  return true
+}
+
+var _SA_schedule_foreground_raf = _SA_schedule_render
+
+function _SA_stop_bg_worker() {
+  if (_SA_bg_worker && _SA_worker_active) {
+    try {
+      _SA_bg_worker.postMessage({ type: 'stop' })
+    } catch (e) {}
+    _SA_worker_active = false
+    _SA_worker_interval = 0
+  }
+  if (_SA_fallback_timer) {
+    clearTimeout(_SA_fallback_timer)
+    _SA_fallback_timer = null
+  }
+}
+
+function _SA_init_bg_worker() {
+  if (_SA_bg_worker) return _SA_bg_worker
+  if (typeof Worker === 'undefined' || typeof Blob === 'undefined' || typeof URL === 'undefined') {
+    return null
+  }
+  try {
+    var code = [
+      'var timer = null;',
+      'self.onmessage = function(e) {',
+      '  if (e.data && e.data.type === "start") {',
+      '    if (timer) clearInterval(timer);',
+      '    var ms = Math.max(4, Math.floor(e.data.interval || 10));',
+      '    timer = setInterval(function() {',
+      '      self.postMessage("tick");',
+      '    }, ms);',
+      '  } else if (e.data && e.data.type === "stop") {',
+      '    if (timer) { clearInterval(timer); timer = null; }',
+      '  }',
+      '};'
+    ].join('\n')
+    var blob = new Blob([code], { type: 'application/javascript' })
+    var url = URL.createObjectURL(blob)
+    _SA_bg_worker = new Worker(url)
+    _SA_bg_worker.onmessage = function(e) {
+      if (e.data === 'tick') {
+        _SA_on_heartbeat_tick()
+      }
+    }
+  } catch (err) {
+    console.warn('[XRA] Background Web Worker watchdog unavailable:', err)
+    _SA_bg_worker = null
+  }
+  return _SA_bg_worker
+}
+
+function _SA_ensure_heartbeat() {
+  var target_fps = (Number.isFinite(window.XRA_render_fps_limit) && window.XRA_render_fps_limit > 0)
+    ? window.XRA_render_fps_limit
+    : (window.XRA_render_fps_limit === 0 ? 120 : 60)
+  var target_interval = 1000 / target_fps
+  // Heartbeat checks at half-frame cadence (min 4ms) to detect stalls with minimum jitter
+  var check_interval = Math.max(4, Math.floor(target_interval / 2))
+  var worker = _SA_init_bg_worker()
+  if (worker) {
+    if (!_SA_worker_active || _SA_worker_interval !== check_interval) {
+      _SA_worker_active = true
+      _SA_worker_interval = check_interval
+      worker.postMessage({ type: 'start', interval: check_interval })
+    }
+  } else if (!_SA_fallback_timer) {
+    _SA_fallback_timer = setTimeout(function _fallback_tick() {
+      _SA_fallback_timer = null
+      _SA_on_heartbeat_tick()
+      if (!_SA_fallback_timer && use_RAF && EV_sync_update.requestAnimationFrame_auto && !EV_sync_update.RAF_paused) {
+        _SA_fallback_timer = setTimeout(_fallback_tick, check_interval)
+      }
+    }, check_interval)
+  }
+}
+
+function _SA_resume_foreground_render() {
+  if (!_SA_is_foreground_active()) return
+  _SA_raf_stalled = false
+  _SA_last_anim_time = (typeof performance !== 'undefined' ? performance.now() : Date.now())
+  _SA_cancel_pending_raf()
+  _SA_schedule_render()
+}
+
+function _SA_on_heartbeat_tick() {
+  if (!use_RAF || !EV_sync_update.requestAnimationFrame_auto || EV_sync_update.RAF_paused) {
+    return
+  }
+  if (_SA_heartbeat_busy) return
+
+  var now = performance.now()
+  var target_fps = (Number.isFinite(window.XRA_render_fps_limit) && window.XRA_render_fps_limit > 0)
+    ? window.XRA_render_fps_limit
+    : (window.XRA_render_fps_limit === 0 ? 120 : 60)
+  var target_interval = 1000 / target_fps
+
+  var is_fg = _SA_is_foreground_active()
+  // When in foreground with active RAF, give vsync full priority and only intervene if RAF freezes completely (500ms).
+  // When unfocused, hidden, or out of view, threshold is 0.85x target interval to maintain steady FPS.
+  var stall_threshold = (!is_fg || _SA_raf_stalled)
+    ? (target_interval * 0.85)
+    : 500
+  var elapsed = now - _SA_last_anim_time
+
+  if (elapsed >= stall_threshold) {
+    _SA_cancel_pending_raf()
+    _SA_raf_stalled = true
+    _SA_heartbeat_busy = true
+    try {
+      _SA_last_anim_time = now
+      Animate_RAF(now, true)
+    } catch (err) {
+      console.error('[XRA] Background render tick error:', err)
+    } finally {
+      _SA_heartbeat_busy = false
+    }
+  }
+}
+
+var Animate_RAF = function (timestamp, from_heartbeat) {
+  if (timestamp == null)
+    timestamp = performance.now()
+  if (RAF_timestamp && timestamp <= RAF_timestamp)
+    timestamp = Math.max(performance.now(), RAF_timestamp + 0.01)
+
+  _SA_last_anim_time = timestamp
+  _SA_ensure_heartbeat()
+
   if (EV_sync_update.requestAnimationFrame_auto) {
-    RAF_timerID = System._browser.requestAnimationFrame(Animate_RAF);
+    _SA_schedule_render()
   }
   else {
+    _SA_stop_bg_worker()
+    _SA_cancel_pending_raf()
     RAF_timerID = null
-//RAF_timerID = setTimeout(function () { Animate_RAF(performance.now()) }, 1000/60)
   }
+//RAF_timerID = setTimeout(function () { Animate_RAF(performance.now()) }, 1000/60)
 
   if (EV_sync_update.RAF_paused) {
     RAF_timestamp = timestamp
     return
   }
 
+  // Render FPS limiter (controlled by XRA settings):
+  const raw_limit = Number(window.XRA_render_fps_limit);
+  // Se 0 (Illimitato/Monitor), applichiamo un tetto massimo a 120 FPS per evitare surriscaldamento o framerate sregolato
+  const xra_frame_rate = (Number.isFinite(raw_limit) && raw_limit > 0) ? raw_limit : (raw_limit === 0 ? 120 : NaN);
+  if (Number.isFinite(xra_frame_rate) && xra_frame_rate > 0) {
+    if (window._XRA_last_fps_limit !== xra_frame_rate) {
+      window._XRA_last_fps_limit = xra_frame_rate;
+      window._XRA_render_acc = 0;
+      window._XRA_last_raf_time = timestamp;
+    }
+    const target_interval = 1000 / xra_frame_rate;
+    if (window._XRA_last_raf_time == null) {
+      window._XRA_last_raf_time = timestamp;
+      window._XRA_render_acc = 0;
+    } else {
+      const delta = Math.max(0, Math.min(200, timestamp - window._XRA_last_raf_time));
+      window._XRA_last_raf_time = timestamp;
+      window._XRA_render_acc = (window._XRA_render_acc || 0) + delta;
+    }
+    // Half-frame threshold (target_interval * 0.75) absorbs display refresh jitter and avoids harmonic frame-dropping (e.g. 120 FPS on 144Hz)
+    // When driven by heartbeat watchdog or timer RAF, the cadence is already paced, so bypass this to prevent dropped frames from jitter.
+    if (!from_heartbeat && !RAF_is_timeout && window._XRA_render_acc < target_interval * 0.75) {
+      return;
+    }
+    if (from_heartbeat || RAF_is_timeout) {
+      window._XRA_render_acc = 0;
+    } else {
+      // Consume one interval, clamping leftover accumulator to at most 1 interval to prevent catch-up bursts
+      window._XRA_render_acc = Math.min(window._XRA_render_acc - target_interval, target_interval);
+    }
+  } else {
+    window._XRA_render_acc = 0;
+    window._XRA_last_raf_time = timestamp;
+    window._XRA_last_fps_limit = xra_frame_rate;
+  }
+
+  // Counts frames that passed the render limiter. VRM spring-bone throttling
+  // uses this cadence, so skipped requestAnimationFrame callbacks cost nothing.
+  window.XRA_render_frame_count = (window.XRA_render_frame_count || 0) + 1;
+
   if (RAF_timestamp) {
     RAF_timestamp_delta = timestamp - RAF_timestamp + RAF_timestamp_delta_accumulated
 
-    let ms_per_frame = 1000 / (EV_sync_update.count_to_10fps_ * 10)
-    let time_diff = RAF_timestamp_delta - ms_per_frame
-    RAF_frame_time_delayed += time_diff
+    // A worker heartbeat can arrive late when the compositor/browser has put
+    // an occluded window to sleep.  Never feed that entire pause into VRM
+    // mixers and spring-bone physics in one update: it causes the avatar to
+    // jump, overshoot or shake when background execution resumes.
+    if ((from_heartbeat || RAF_is_timeout) && Number.isFinite(xra_frame_rate) && xra_frame_rate > 0) {
+      const heartbeat_max_delta = (1000 / xra_frame_rate) * 2
+      RAF_timestamp_delta = Math.max(0, Math.min(RAF_timestamp_delta, heartbeat_max_delta))
+    }
 
-    if (RAF_frame_time_delayed < -ms_per_frame) {
+    const legacy_frame_rate = EV_sync_update.count_to_10fps_ * 10
+    const xra_overrides_legacy_cap = Number.isFinite(xra_frame_rate)
+
+    if (!xra_overrides_legacy_cap) {
+      let ms_per_frame = 1000 / legacy_frame_rate
+      let time_diff = RAF_timestamp_delta - ms_per_frame
+      RAF_frame_time_delayed += time_diff
+
+      if (RAF_frame_time_delayed < -ms_per_frame) {
 // funny that -= or += makes no big difference as fps control (-= seems more logical though)
-      RAF_frame_time_delayed -= time_diff
+        RAF_frame_time_delayed -= time_diff
 //DEBUG_show(~~RAF_frame_time_delayed+'/'+ ~~time_diff,0,1)
 //console.log(++RAF_frame_drop)
-      return
+        return
+      }
+      else if (RAF_frame_time_delayed > ms_per_frame) {
+        RAF_frame_time_delayed = ms_per_frame
+      }
     }
-    else if (RAF_frame_time_delayed > ms_per_frame) {
-      RAF_frame_time_delayed = ms_per_frame
+    else {
+      // The explicit XRA limiter above (or the monitor for Unlimited) owns the
+      // cadence. Do not let stale debt from the legacy 60 FPS gate skip frames.
+      RAF_frame_time_delayed = 0
     }
   }
   RAF_timestamp = timestamp
@@ -2673,10 +2956,49 @@ var Animate_RAF = function (timestamp) {
   }
   catch (err) { console.error(err) }
 */
-  Animate()
+  try {
+    Animate()
+  } catch (renderErr) {
+    console.error('[XRA] Animate render error:', renderErr)
+  }
+}
+
+function _SA_on_blur() {
+  _SA_cancel_pending_raf()
+  _SA_raf_stalled = true
+  _SA_schedule_render()
+}
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('focus', _SA_resume_foreground_render, { passive: true })
+  window.addEventListener('blur', _SA_on_blur, { passive: true })
+  window.addEventListener('pageshow', _SA_resume_foreground_render, { passive: true })
+  window.addEventListener('pagehide', _SA_on_blur, { passive: true })
+  window.addEventListener('pointerdown', _SA_resume_foreground_render, { passive: true })
+  window.addEventListener('keydown', _SA_resume_foreground_render, { passive: true })
+  try {
+    if (window.nw?.Window) {
+      var nwWin = nw.Window.get()
+      nwWin.on('focus', _SA_resume_foreground_render)
+      nwWin.on('blur', _SA_on_blur)
+      nwWin.on('restore', _SA_resume_foreground_render)
+      nwWin.on('minimize', _SA_on_blur)
+    }
+  } catch (_e) {}
+}
+
+if (typeof document !== 'undefined' && document.addEventListener) {
+  document.addEventListener('visibilitychange', function () {
+    if (document.hidden) {
+      _SA_on_blur()
+    } else {
+      _SA_resume_foreground_render()
+    }
+  })
 }
 
 function Animate() {
+  window.XRA_render_frame_tick?.(performance.now());
 //EV_sync_update.fps_count_func()
 //if (!is_SA_child_animation && EV_sync_update.fps_last) { console.log('FPS:' + EV_sync_update.fps_last); EV_sync_update.fps_last=0; }
   var active_child = []
@@ -2731,6 +3053,7 @@ function Animate() {
       catch (err) {}
     }
   }
+  window.XRA_recorder_render_hook?.(performance.now());
 }
 
 var RAF_animation_frame_timestamp_last = 0
@@ -2752,7 +3075,7 @@ function Animate_core() {
       always_update_event = true
   }
   else if (use_full_fps)
-    update = true
+    update = always_update_event = true
 
   EV_sync_update.no_update_count++
   EV_sync_update.no_animation_count++
@@ -3100,7 +3423,7 @@ SA_topmost_window.document.body.dispatchEvent(evt)
 
   if (mouse_over_old != mouse_over_new) {
     if (IgnoreMouseEventsPartial) {
-      SA_bridge.window.setIgnoreMouseEvents(!mouse_over_new)
+      webkit_window.setIgnoreMouseEvents(!mouse_over_new)
     }
     var _body = (is_SA_child_animation) ? parent.document.getElementById("Ichild_animation" + SA_child_animation_id) : _b.body
     var opacity_new = _b.Opacity * ((mouse_over_new) ? parseFloat(opacity_on_hover || 1) : 1)

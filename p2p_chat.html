@@ -1,0 +1,280 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>Studio Link · XR Animator</title>
+  <script>
+    const chatParams = new URLSearchParams(location.search);
+    if (chatParams.get('embed') === '1') {
+      document.documentElement.classList.add('is-embedded');
+    }
+  </script>
+  <link rel="stylesheet" href="css/p2p_chat.css">
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <div class="brand" aria-label="XR Animator Studio Link">
+        <span class="brand-mark" aria-hidden="true"><i></i><i></i></span>
+        <span>
+          <strong>STUDIO LINK</strong>
+          <small>XR Animator</small>
+        </span>
+      </div>
+
+      <div class="topbar-actions">
+        <div class="network-state" aria-live="polite">
+          <span id="status-dot" class="status-dot"></span>
+          <span id="status-text">Avvio rete…</span>
+        </div>
+        <button id="topbar-fullscreen-btn" class="quiet-button icon-button" type="button" title="Attiva/disattiva schermo intero (F11)" aria-label="Schermo intero">⛶</button>
+        <button id="topbar-close-btn" class="quiet-button icon-button close-window-btn" type="button" title="Chiudi Studio Link" aria-label="Chiudi Studio Link">✕</button>
+      </div>
+    </header>
+
+    <main>
+      <section id="setup-view" class="onboarding">
+        <div class="intro-copy">
+          <span class="eyebrow">CONNESSIONE DIRETTA</span>
+          <h1>Il backstage del tuo podcast.</h1>
+          <p>Chat, voce e condivisione schermo tra due postazioni, senza account. Aprite entrambi Studio Link e scambiatevi l’ID.</p>
+          <div class="feature-line" aria-label="Funzioni disponibili">
+            <span>● Chat P2P</span>
+            <span>● Audio WebRTC</span>
+            <span>● Screen share</span>
+          </div>
+        </div>
+
+        <div class="engine-switch-container">
+          <div class="engine-switch" role="tablist" aria-label="Modalità di connessione">
+            <button id="engine-peerjs-btn" class="engine-tab active" type="button" role="tab" aria-selected="true">
+              <span class="engine-icon">🌐</span>
+              <span class="engine-name">PeerJS <small>(ID Standard)</small></span>
+            </button>
+            <button id="engine-nostr-btn" class="engine-tab" type="button" role="tab" aria-selected="false">
+              <span class="engine-icon">⚡</span>
+              <span class="engine-name">Nostr <small>(Token Cifrato)</small></span>
+            </button>
+          </div>
+          <p id="engine-description" class="engine-description">
+            Connessione standard basata su ID corto. Usa il cloud PeerJS per l'handshake iniziale.
+          </p>
+        </div>
+
+        <div class="setup-grid">
+          <article class="card identity-card">
+            <div class="card-heading">
+              <span class="step">01</span>
+              <div>
+                <h2>Il tuo studio</h2>
+                <p id="identity-subheading">Invia questo ID all’altro partecipante.</p>
+              </div>
+            </div>
+
+            <!-- PeerJS Identity -->
+            <div id="peerjs-identity-view">
+              <button id="copy-id-btn" class="id-display" type="button" title="Copia ID">
+                <span id="my-id">generazione-id…</span>
+                <span class="copy-glyph" aria-hidden="true">⧉</span>
+              </button>
+              <button id="copy-invite-btn" class="secondary-button" type="button" disabled>Copia ID invito</button>
+            </div>
+
+            <!-- Nostr Token Identity -->
+            <div id="nostr-identity-view" hidden>
+              <div id="copy-token-box" class="token-display-box" role="button" tabindex="0" title="Clicca per copiare il Token">
+                <div class="token-content">
+                  <span class="token-tag">TOKEN NOSTR</span>
+                  <span id="my-token-display" class="token-mono">generazione-token…</span>
+                </div>
+                <span class="copy-glyph" aria-hidden="true">⧉</span>
+              </div>
+              <div class="token-actions">
+                <button id="copy-token-btn" class="primary-button" type="button" disabled>Copia Token</button>
+                <button id="copy-nostr-invite-btn" class="secondary-button" type="button" disabled>Copia link</button>
+                <button id="regen-token-btn" class="secondary-button icon-only" type="button" title="Genera un nuovo token effimero">🔄</button>
+              </div>
+              <div class="relay-pill">
+                <span class="relay-dot"></span>
+                <span id="nostr-relay-info">nos.lol · +4 riserve · E2E</span>
+              </div>
+            </div>
+          </article>
+
+          <article class="card connect-card">
+            <div class="card-heading">
+              <span class="step">02</span>
+              <div>
+                <h2>Entra in studio</h2>
+                <p id="connect-subheading">Incolla l’ID ricevuto e collegati.</p>
+              </div>
+            </div>
+
+            <!-- PeerJS Connect -->
+            <div id="peerjs-connect-view">
+              <label for="peer-id-input">ID dell’altro partecipante</label>
+              <div class="connect-row">
+                <input id="peer-id-input" type="text" inputmode="text" autocomplete="off" spellcheck="false" placeholder="peer-id">
+                <button id="connect-btn" class="primary-button" type="button" disabled>Connetti</button>
+              </div>
+            </div>
+
+            <!-- Nostr Connect -->
+            <div id="nostr-connect-view" hidden>
+              <label for="nostr-token-input">Token dell’altro partecipante</label>
+              <div class="connect-row nostr-connect-row">
+                <div class="token-input-wrap">
+                  <input id="nostr-token-input" type="text" class="token-input-field" autocomplete="off" spellcheck="false" placeholder="Incolla qui il token xra1_...">
+                  <button id="paste-token-btn" class="inline-paste-btn" type="button" title="Incolla dagli appunti" aria-label="Incolla dagli appunti"><span aria-hidden="true">📋</span><span class="paste-label">Incolla</span></button>
+                </div>
+                <button id="connect-nostr-btn" class="primary-button" type="button" disabled>Connetti</button>
+              </div>
+            </div>
+
+            <p id="connect-hint" class="hint">L’ID appare appena il collegamento alla rete è pronto.</p>
+          </article>
+
+          <details class="card device-card">
+            <summary>Audio e dispositivi <span>Impostazioni</span></summary>
+            <div class="device-grid">
+              <label>
+                <span>Microfono</span>
+                <select id="audio-input-select"><option value="">Predefinito</option></select>
+              </label>
+              <label>
+                <span>Uscita audio</span>
+                <select id="audio-output-select"><option value="">Predefinita</option></select>
+              </label>
+            </div>
+            <button id="refresh-devices-btn" class="text-button" type="button">Aggiorna dispositivi</button>
+          </details>
+        </div>
+      </section>
+
+      <section id="session-view" class="session" hidden>
+        <section class="stage-panel">
+          <div class="session-bar">
+            <div class="session-bar-info">
+              <span class="eyebrow">SESSIONE ATTIVA</span>
+              <strong id="session-peer">Peer</strong>
+            </div>
+            <div class="session-bar-actions">
+              <button id="session-devices-toggle" class="quiet-button" type="button" title="Impostazioni microfono e uscita audio durante la chiamata">⚙️ Audio</button>
+              <button id="disconnect-btn" class="quiet-button" type="button">Disconnetti</button>
+            </div>
+
+            <div id="session-devices-panel" class="session-devices-popover" hidden>
+              <div class="devices-popover-head">
+                <div class="devices-popover-title">
+                  <span class="devices-popover-icon" aria-hidden="true">🎙️</span>
+                  <span>Dispositivi Audio</span>
+                </div>
+                <button id="session-devices-close" class="devices-popover-close" type="button" aria-label="Chiudi impostazioni audio">✕</button>
+              </div>
+              <div class="devices-popover-body">
+                <label class="devices-popover-field">
+                  <span class="devices-field-label">Microfono</span>
+                  <select id="session-audio-input-select"><option value="">Predefinito</option></select>
+                </label>
+                <label class="devices-popover-field">
+                  <span class="devices-field-label">Uscita audio (cuffie / casse)</span>
+                  <select id="session-audio-output-select"><option value="">Predefinita</option></select>
+                </label>
+              </div>
+              <div class="devices-popover-foot">
+                <button id="session-refresh-devices-btn" class="popover-refresh-btn" type="button">🔄 Aggiorna elenco</button>
+                <span class="devices-popover-live-badge"><span class="badge-dot"></span> In tempo reale</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="video-stage">
+            <video id="main-video" autoplay playsinline muted></video>
+            <canvas id="local-preview-canvas" class="local-preview-canvas" hidden></canvas>
+            <div id="no-video-msg" class="stage-empty" role="button" tabindex="0" title="Clicca per avviare la condivisione dello schermo">
+              <span class="screen-icon" aria-hidden="true">▱</span>
+              <strong>Nessuno schermo condiviso</strong>
+              <small>Attiva la condivisione</small>
+            </div>
+            <span id="share-label" class="share-label" hidden>STAI CONDIVIDENDO</span>
+          </div>
+
+          <div class="call-controls" aria-label="Controlli chiamata">
+            <button id="mute-btn" class="mute-button" type="button" disabled title="Muta o riattiva il tuo microfono">
+              <span class="mute-icon" aria-hidden="true">🎤</span>
+              <span class="mute-text">Muta</span>
+            </button>
+            <button id="screenshare-btn" type="button">
+              <span aria-hidden="true">▣</span>
+              <span>Condividi schermo</span>
+            </button>
+            <button id="stop-share-btn" class="warning-button" type="button" hidden title="Interrompi solo la condivisione dello schermo (la voce continua)">
+              <span aria-hidden="true">⏹️</span>
+              <span>Ferma schermo</span>
+            </button>
+            <button id="send-avatar-btn" class="avatar-button" type="button" disabled title="Invia o interrompi lo streaming mocap del tuo avatar in tempo reale">
+              <span class="avatar-icon" aria-hidden="true">🎭</span>
+              <span class="avatar-text">Invia avatar</span>
+            </button>
+            <button id="eco-mode-btn" class="eco-button" type="button" title="Ferma il rendering locale di avatar e scena per risparmiare CPU/GPU (il mocap continua)">
+              <span class="eco-icon" aria-hidden="true">🌿</span>
+              <span class="eco-text">Risparmio 3D</span>
+            </button>
+            <button id="sync-marker-btn" class="sync-button" type="button" disabled title="Registra un marker di sincronizzazione (entrambi devono essere in registrazione)">
+              <span aria-hidden="true">⏱️</span>
+              <span>Sincronizza</span>
+            </button>
+          </div>
+        </section>
+
+        <aside class="conversation">
+          <div class="conversation-head">
+            <div>
+              <span class="eyebrow">REGIA</span>
+              <h2>Chat</h2>
+            </div>
+            <div class="conversation-head-actions">
+              <button id="chat-sync-marker-btn" class="chat-sync-btn" type="button" disabled title="Sincronizza registrazioni">⏱️ Sync</button>
+              <span id="chat-state" class="chat-state">in attesa</span>
+              <button id="chat-minimize-btn" class="quiet-button icon-button" type="button" title="Minimizza chat" aria-label="Minimizza chat">—</button>
+            </div>
+          </div>
+
+          <div id="chat-box" class="chat-box" aria-live="polite">
+            <div id="chat-empty" class="chat-empty">
+              <span aria-hidden="true">↗</span>
+              <strong>Canale pronto</strong>
+              <small>I messaggi compariranno qui.</small>
+            </div>
+          </div>
+
+          <div class="composer">
+            <textarea id="chat-input" rows="1" maxlength="4000" placeholder="Scrivi un messaggio…" disabled></textarea>
+            <button id="send-btn" class="send-button" type="button" disabled aria-label="Invia messaggio">↑</button>
+          </div>
+          <p class="composer-hint">Invio per spedire · Maiusc+Invio per andare a capo</p>
+        </aside>
+
+        <button id="chat-restore-btn" class="chat-restore-tab" type="button" hidden title="Mostra chat">
+          <span class="chat-icon">💬</span>
+          <span class="chat-label">Chat</span>
+          <span id="chat-unread-badge" class="chat-unread-badge" hidden></span>
+        </button>
+      </section>
+    </main>
+
+    <footer>
+      <span>WebRTC cifrato durante il trasporto</span>
+      <span id="footer-engine-info">Il server PeerJS viene usato solo per trovare l’altro peer</span>
+    </footer>
+  </div>
+
+  <audio id="remote-audio" autoplay playsinline hidden></audio>
+  <script src="js/peerjs.min.js"></script>
+  <script src="js/nostr.bundle.min.js"></script>
+  <script src="js/signaling_adapter.js"></script>
+  <script src="js/p2p_chat.js"></script>
+</body>
+</html>

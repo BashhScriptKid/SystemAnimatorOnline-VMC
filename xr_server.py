@@ -1,0 +1,2042 @@
+#!/usr/bin/env python3
+from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
+from pathlib import Path
+from urllib.parse import unquote, urlparse
+import json
+import threading
+import shutil
+import re
+import time
+import uuid
+import subprocess
+import sys
+import os
+
+if getattr(sys, "frozen", False):
+    import importlib.machinery
+    if importlib.machinery.PathFinder not in sys.meta_path[:1]:
+        sys.meta_path.insert(0, importlib.machinery.PathFinder)
+
+if getattr(sys, 'frozen', False):
+    _runtime_root = Path(sys.executable).resolve().parent
+else:
+    _runtime_root = Path(__file__).resolve().parent
+_profile_root = Path(os.environ.get("XRA_PROFILE_ROOT") or _runtime_root).resolve()
+
+try:
+    _prof_path = _profile_root / "xra_profile.json"
+    if _prof_path.is_file():
+        with open(_prof_path, "r", encoding="utf-8") as _f:
+            _perf = json.load(_f).get("custom", {}).get("performance", {})
+            _ai_gpu = str(_perf.get("hardware_mode") or _perf.get("ai_gpu_preference", "Auto")).strip()
+            if _ai_gpu in ("high-performance", "GPU_dGPU", "dGPU"):
+                os.environ["__EGL_VENDOR_LIBRARY_FILENAMES"] = "/usr/share/glvnd/egl_vendor.d/10_nvidia.json"
+                os.environ["XRA_HARDWARE_MODE"] = _ai_gpu
+            elif _ai_gpu in ("low-power", "GPU_iGPU", "iGPU"):
+                os.environ["__EGL_VENDOR_LIBRARY_FILENAMES"] = "/usr/share/glvnd/egl_vendor.d/50_mesa.json"
+                os.environ["XRA_HARDWARE_MODE"] = _ai_gpu
+            elif _ai_gpu.lower() == "cpu":
+                os.environ["XRA_FORCE_CPU"] = "1"
+                os.environ["XRA_HARDWARE_MODE"] = "CPU"
+            else:
+                os.environ["XRA_HARDWARE_MODE"] = "Auto"
+except Exception:
+    pass
+
+# XR Animator native MediaPipe backend. Import is defensive so a broken model
+# package never prevents the static application server from starting.
+try:
+    from xra_backends import registry as backend_registry
+    from xra_backends import downloader as backend_downloader
+    from xra_backends import engine as backend_engine
+    from xra_backends import server as backend_server
+    from xra_backends import provision as backend_provision
+    BACKENDS_OK = True
+except Exception as _backend_exc:  # pragma: no cover - import guard
+    backend_registry = None
+    backend_downloader = backend_engine = backend_server = None
+    backend_provision = None
+    BACKENDS_OK = False
+    _BACKENDS_IMPORT_ERROR = str(_backend_exc)
+
+
+def _start_backend_provisioning():
+    """Check/download the native Tasks models exactly once.
+
+    Called at import time so it runs no matter the entry point (frozen
+    xr_launcher.py imports xr_server; running xr_server.py directly also
+    imports it). With the bundled build this is a pure no-op that just records
+    a ready state; otherwise it starts a background download thread.
+    """
+    global _BACKEND_PROVISION_STARTED
+    if not BACKENDS_OK or _BACKEND_PROVISION_STARTED:
+        return
+    _BACKEND_PROVISION_STARTED = True
+    try:
+        prov = backend_provision.autostart()
+        print(f"[XRA] Backend provisioning: {prov.get('phase')} — {prov.get('message','')}")
+    except Exception as exc:  # never block the server
+        print(f"[XRA] Backend provisioning failed to start: {exc}")
+
+
+_BACKEND_PROVISION_STARTED = False
+_start_backend_provisioning()
+
+ROOT = _runtime_root
+PROFILE_ROOT = _profile_root
+
+PROFILE_FILE = PROFILE_ROOT / "xra_profile.json"
+BACKUP_FILE = ROOT / "xra_profile.backup.json"
+LOCK = threading.Lock()
+RECORDING_LOCK = threading.Lock()
+RECORDING_SESSIONS = {}
+BACKGROUND_CACHE = {"ts": 0.0, "files": []}
+STAGE_CACHE = {"ts": 0.0, "files": []}
+PROP_CACHE = {"ts": 0.0, "files": []}
+RECORDINGS_DIR = ROOT / "recordings"
+RECORDING_MANIFEST_DIR = ROOT / ".xra_recording_sessions"
+XRA_RECORDER_API_VERSION = 766
+RECORDING_MANIFEST_DIR.mkdir(parents=True, exist_ok=True)
+AVATAR_DIR = ROOT / "avatars"
+AVATAR_DIR.mkdir(parents=True, exist_ok=True)
+AVATAR_EXTS = {".vrm", ".glb", ".gltf"}
+AVATAR_MAX_BYTES = 256 * 1024 * 1024
+
+DEFAULT_CUSTOM = {
+    "camera": {"optimized": True, "width": 640, "height": 480, "fps": 30},
+    "pose_model": "Normal",
+    "lip": {
+        "optimized": True, "fft_size": 512, "analysis_fps": 30, "mic_mix": 0.60,
+        "threshold": 0.018, "meter_visible": False, "response_gain": 1.0, "vowel_emphasis": 1.0,
+    },
+    "performance": {
+        "preset": "CUSTOM", "master_preset": "CUSTOM", "tracking_pipeline": "FULL_BODY",
+        "disable_postfx": False, "pose_fps": 30, "hand_fps": 20,
+        "auto_last_result": None,
+        "runtime_adaptive": False, "diagnostics_hud": False, "tracker_backend": "mediapipe-tasks-landmarker",
+    },
+    "debug": {"session_enabled": False, "max_events": 12000},
+    "body": {"anchor_strength": 0.80, "transition_ms": 450, "stable": False},
+    "tracking": {
+        "hands_enabled": True, "hand_recovery_mode": "normal", "hand_detection_sensitivity": "high", "native_smoothing": 0, "body_bend_reduction": 0,
+        "motion_hysteresis_enabled": False,
+        "upper_body_guard": False, "upper_body_guard_strength": 0.0,
+        "guard_jump_deg": 42, "guard_hold_ms": 650, "guard_reacquire_deg": 60,
+        "guard_mode": "off", "desk_torso_lock": 0.55, "desk_hips_lock": 0.92, "desk_legs_lock": 1.0,
+        "adaptive_smoothing": True, "adaptive_smoothing_strength": 0.45, "guard_confidence_min": 0.35,
+        "desk_max_yaw_deg": 25, "desk_max_pitch_deg": 15, "desk_max_roll_deg": 12,
+        "guard_release_ms": 450, "freeze_head_on_face_loss": False, "freeze_recovery_ms": 350
+    },
+    "background": {"mode": "color", "color": "#202020", "path": "backgrounds/default.png"},
+    "collider": {
+        "preset": "CUSTOM", "mode": 0, "reaction": "z_push",
+        "head": 100, "chest": 100, "waist": 100, "hip": 100,
+        "front_guard": False, "front_clearance": 8,
+    },
+    "visual_effects": {"UnrealBloom": None, "N8AO": None, "DOF": None},
+    "left_settings": {},
+    "avatar": {
+        "filename": "", "pose_key": "", "offset_x": 0.0, "offset_y": 0.0,
+        "offset_z": 0.0, "rotation_y": 0.0, "face_camera": False,
+    },
+    "second_avatar": {
+        "vrm_path": "AliciaSolid", "offset_x": 12.0, "offset_y": 0.0,
+        "offset_z": 0.0, "rotation_y": 0.0, "face_camera": False,
+    },
+    "devices": {
+        "mic_device_id": "", "camera_device_id": "", "camera_label": "",
+        "mirror_preview": False, "selfie_mode": False,
+    },
+    "recorder": {
+        "preset": "PODCAST", "mode": "video_audio", "audio_only_variant": "both", "width": 1280, "height": 720, "fps": 30,
+        "video_bps": 3000000, "audio_bps": 128000, "audio_profile": "podcast",
+        "noise_gate": True, "gate_threshold_db": -48, "gate_noise_floor_db": None, "gate_hold_ms": 160, "gate_release_ms": 120,
+        "segment_minutes": 0, "output_format": "webm", "output_dir": "",
+        "filename": "XR_Animator_{date}_{time}", "raw_audio_backup": True, "raw_audio_format": "flac", "hardware_encode": "auto", "chroma_safe": True, "force_render_resolution": True, "capture_source": "classic_v74",
+    },
+    "ui": {"visible": True, "active_tab": "quick", "language": "auto", "preview_video": None, "preview_wireframe": None, "preview_debug": None},
+}
+
+DEFAULT_PROFILE = {
+    "version": 7.80,
+    "custom": DEFAULT_CUSTOM,
+    "XR_Animator_settings": None,
+}
+
+
+def deep_merge(base, extra):
+    if not isinstance(base, dict) or not isinstance(extra, dict):
+        return extra
+    out = dict(base)
+    for key, value in extra.items():
+        if key in out and isinstance(out[key], dict) and isinstance(value, dict):
+            out[key] = deep_merge(out[key], value)
+        else:
+            out[key] = value
+    return out
+
+
+def read_profile_file(path):
+    with path.open("r", encoding="utf-8") as handle:
+        loaded = json.load(handle)
+    if "custom" not in loaded:
+        loaded = {"version": 5.1, "custom": loaded, "XR_Animator_settings": None}
+    try:
+        old_version = float(loaded.get("version") or 0)
+    except Exception:
+        old_version = 0.0
+    profile = deep_merge(DEFAULT_PROFILE, loaded)
+    # V7.6.3 migration: never silently raise video bitrate. Resolution and
+    # bitrate are independent and the UI estimate must reflect the user's exact
+    # choice. Keep RAW mic backup enabled when migrating older profiles.
+    if old_version < 7.63:
+        rec = profile.setdefault("custom", {}).setdefault("recorder", {})
+        if rec.get("raw_audio_backup") is False and old_version < 7.62:
+            rec["raw_audio_backup"] = True
+        tracking = profile.setdefault("custom", {}).setdefault("tracking", {})
+        tracking["guard_mode"] = "off"
+        tracking["upper_body_guard"] = False
+    # V7.6.6+: retire screen-sharing/native-only fallbacks. Classic output is the
+    # recorder's supported default and includes the configured background.
+    rec = profile.setdefault("custom", {}).setdefault("recorder", {})
+    if str(rec.get("capture_source") or "") in {"browser_visible", "native_visible", "native_xr", ""}:
+        rec["capture_source"] = "classic_v74"
+    # Unify the old Body Stable / Torso Guard / Podcast-Desk states into one
+    # body-stabilization switch, then keep anti-jerk hysteresis independent.
+    body = profile.setdefault("custom", {}).setdefault("body", {})
+    tracking = profile.setdefault("custom", {}).setdefault("tracking", {})
+    if old_version < 7.80:
+        old_mode = str(tracking.get("guard_mode") or ("guard" if tracking.get("upper_body_guard") else "off")).lower()
+        if not body.get("stable") and old_mode != "off":
+            body["stable"] = True
+            try:
+                body["anchor_strength"] = max(0.0, min(1.0, float(tracking.get("upper_body_guard_strength", 0.80))))
+            except Exception:
+                body["anchor_strength"] = 0.80
+    tracking["guard_mode"] = "guard" if tracking.get("motion_hysteresis_enabled") else "off"
+    tracking["upper_body_guard"] = bool(tracking.get("motion_hysteresis_enabled"))
+    tracking["upper_body_guard_strength"] = 0.0
+    # The removed camera-lock experiment used this section exclusively.
+    profile.setdefault("custom", {}).pop("view", None)
+
+    # Drop retired UI/runtime keys that no longer have a reader.
+    performance = profile.setdefault("custom", {}).setdefault("performance", {})
+    performance.pop("startup_mocap", None)
+    performance.pop("e2_master", None)
+    for key in ("body_fps", "head_fps", "dwpose_body_fps", "mediapipe_head_fps", "drishti_threads"):
+        performance.pop(key, None)
+    profile.setdefault("custom", {}).setdefault("ui", {}).pop("show_legacy_toolbar", None)
+    left_settings = profile.setdefault("custom", {}).setdefault("left_settings", {})
+    for key in list(left_settings):
+        if "Scene / 3D::" in key:
+            left_settings.pop(key, None)
+
+    # Remove retired tracking-loss fields from imported profiles.
+    tracking = profile.setdefault("custom", {}).setdefault("tracking", {})
+    for key in (
+        "head_loss_guard", "avatar_loss_hide_mode", "avatar_face_loss_hide_ms", "avatar_face_return_ms",
+        "head_confidence_min", "head_hold_ms", "head_release_ms", "head_loss_transition_ms",
+        "head_jump_deg", "head_reacquire_deg", "head_reacquire_stable_ms",
+    ):
+        tracking.pop(key, None)
+    # Migrate old V7.x profiles in memory while preserving every saved setting.
+    profile["version"] = DEFAULT_PROFILE["version"]
+    return profile
+
+
+def save_profile(profile, rotate_backup=True):
+    tmp = PROFILE_FILE.with_suffix(".json.tmp")
+    with LOCK:
+        with tmp.open("w", encoding="utf-8") as handle:
+            json.dump(profile, handle, indent=2, ensure_ascii=False)
+            handle.write("\n")
+
+        if rotate_backup and PROFILE_FILE.exists():
+            try:
+                read_profile_file(PROFILE_FILE)
+                shutil.copy2(PROFILE_FILE, BACKUP_FILE)
+            except Exception:
+                pass
+
+        tmp.replace(PROFILE_FILE)
+
+    try:
+        from xra_backends import capture as backend_capture
+        perf = (profile.get("custom") or {}).get("performance") or {}
+        fps = perf.get("pose_fps")
+        cam = (profile.get("custom") or {}).get("camera") or {}
+        cam_w = cam.get("width")
+        cam_h = cam.get("height")
+        tracking_pipeline = str(perf.get("tracking_pipeline") or "").upper()
+        infer_mode = perf.get("infer_mode")
+        infer_w = perf.get("infer_width")
+        infer_h = perf.get("infer_height")
+        inference_headroom = perf.get("inference_headroom")
+        kwargs = {}
+        if fps is not None:
+            kwargs["fps"] = float(fps)
+        if cam_w is not None:
+            kwargs["width"] = int(cam_w)
+        if cam_h is not None:
+            kwargs["height"] = int(cam_h)
+        if infer_mode is not None:
+            kwargs["infer_mode"] = infer_mode
+        if infer_w is not None and infer_h is not None:
+            kwargs["infer_width"] = int(infer_w)
+            kwargs["infer_height"] = int(infer_h)
+        if inference_headroom is not None:
+            kwargs["inference_headroom"] = float(inference_headroom)
+        tracking = (profile.get("custom") or {}).get("tracking") or {}
+        if "arm_steady_hold" in tracking:
+            kwargs["arm_steady_hold"] = bool(tracking["arm_steady_hold"])
+        kwargs["mocap_mode"] = "face" if tracking_pipeline == "FACE" else "holistic"
+        if kwargs:
+            backend_capture.CAPTURE.configure(**kwargs)
+        if backend_engine and backend_engine.ENGINE:
+            conf_kw = {}
+            if "min_joint_confidence" in perf:
+                conf_kw["min_joint"] = float(perf["min_joint_confidence"])
+            if "desk_wrist_guard" in tracking:
+                conf_kw["desk_wrist_guard"] = bool(tracking["desk_wrist_guard"])
+            if conf_kw:
+                backend_engine.ENGINE.configure_confidence(**conf_kw)
+    except Exception:
+        pass
+
+
+def load_profile():
+    if PROFILE_FILE.exists():
+        try:
+            p = read_profile_file(PROFILE_FILE)
+            try:
+                from xra_backends import capture as backend_capture
+                from xra_backends import engine as backend_engine
+                perf = (p.get("custom") or {}).get("performance") or {}
+                tracking = (p.get("custom") or {}).get("tracking") or {}
+                pipe = str(perf.get("tracking_pipeline") or "").upper()
+                fps = perf.get("pose_fps")
+                infer_mode = perf.get("infer_mode")
+                infer_w = perf.get("infer_width")
+                infer_h = perf.get("infer_height")
+                kw = {"mocap_mode": "face" if pipe == "FACE" else "holistic"}
+                if fps is not None:
+                    kw["fps"] = float(fps)
+                if infer_mode is not None:
+                    kw["infer_mode"] = infer_mode
+                if infer_w is not None and infer_h is not None:
+                    kw["infer_width"] = int(infer_w)
+                    kw["infer_height"] = int(infer_h)
+                if "inference_headroom" in perf:
+                    kw["inference_headroom"] = float(perf["inference_headroom"])
+                if "arm_steady_hold" in tracking:
+                    kw["arm_steady_hold"] = bool(tracking["arm_steady_hold"])
+                backend_capture.CAPTURE.configure(**kw)
+                if backend_engine and backend_engine.ENGINE:
+                    conf_kw = {}
+                    if "min_joint_confidence" in perf:
+                        conf_kw["min_joint"] = float(perf["min_joint_confidence"])
+                    if "desk_wrist_guard" in tracking:
+                        conf_kw["desk_wrist_guard"] = bool(tracking["desk_wrist_guard"])
+                    if conf_kw:
+                        backend_engine.ENGINE.configure_confidence(**conf_kw)
+            except Exception:
+                pass
+            return p
+        except Exception as exc:
+            print(f"[XRA] Main profile invalid: {exc}")
+
+    if BACKUP_FILE.exists():
+        try:
+            recovered = read_profile_file(BACKUP_FILE)
+            print("[XRA] Recovered profile from xra_profile.backup.json")
+            save_profile(recovered, rotate_backup=False)
+            return recovered
+        except Exception as exc:
+            print(f"[XRA] Backup profile invalid: {exc}")
+
+    clean = deep_merge(DEFAULT_PROFILE, {})
+    save_profile(clean, rotate_backup=False)
+    print("[XRA] Created a clean default profile")
+    return clean
+
+
+def safe_avatar_name(filename):
+    name = Path(unquote(str(filename or ""))).name
+    ext = Path(name).suffix.lower()
+    if ext not in AVATAR_EXTS:
+        return None
+    stem = re.sub(r'[<>:"/\\|?*\x00-\x1f]+', "_", Path(name).stem).strip().strip(".")
+    stem = (stem or "avatar")[:160]
+    return stem + ext
+
+
+def _avatar_dir():
+    AVATAR_DIR.mkdir(parents=True, exist_ok=True)
+    return AVATAR_DIR.resolve()
+
+
+def avatar_file(filename):
+    """Resolve a saved avatar only inside the app-local avatars library."""
+    name = safe_avatar_name(filename)
+    if not name:
+        return None
+    folder = _avatar_dir()
+    try:
+        candidate = (folder / name).resolve()
+        if candidate.parent != folder:
+            return None
+        if candidate.is_file():
+            return candidate
+        wanted = name.casefold()
+        for item in folder.iterdir():
+            if item.is_file() and item.name.casefold() == wanted:
+                resolved = item.resolve()
+                if resolved.parent == folder:
+                    return resolved
+    except OSError:
+        return None
+    return None
+
+
+def avatar_files():
+    folder = _avatar_dir()
+    allowed = {".vrm", ".glb"}
+    found = []
+    if folder.exists():
+        for item in sorted(folder.iterdir(), key=lambda p: p.name.casefold()):
+            if item.is_file() and item.suffix.lower() in allowed:
+                found.append(item.name)
+    return found
+
+
+def save_prop_upload(filename, stream, length):
+    name = Path(unquote(str(filename or ""))).name
+    ext = Path(name).suffix.lower()
+    if ext not in {".glb", ".gltf"}:
+        raise ValueError("Invalid prop extension")
+    stem = re.sub(r"[<>:\"/\\|?*\x00-\x1f]+", "_", Path(name).stem).strip().strip(".")
+    stem = (stem or "prop")[:160]
+    name = stem + ext
+    if length <= 0 or length > AVATAR_MAX_BYTES:
+        raise ValueError("Invalid prop size")
+    folder = ROOT / "props"
+    folder.mkdir(parents=True, exist_ok=True)
+    dest = (folder / name).resolve()
+    if dest.parent != folder:
+        raise ValueError("Invalid prop path")
+    import uuid
+    tmp = dest.with_name(dest.name + f".{uuid.uuid4().hex}.tmp")
+    remaining = length
+    try:
+        with tmp.open("wb") as handle:
+            while remaining:
+                data = stream.read(min(1024 * 1024, remaining))
+                if not data:
+                    raise IOError("Unexpected end of prop upload")
+                handle.write(data)
+                remaining -= len(data)
+        tmp.replace(dest)
+        PROP_CACHE["ts"] = 0.0 # invalidate cache
+    finally:
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+    return dest.name
+
+def save_avatar_upload(filename, stream, length):
+    name = safe_avatar_name(filename)
+    if not name:
+        raise ValueError("Invalid avatar filename")
+    if length <= 0 or length > AVATAR_MAX_BYTES:
+        raise ValueError("Invalid avatar size")
+    folder = _avatar_dir()
+    dest = (folder / name).resolve()
+    if dest.parent != folder:
+        raise ValueError("Invalid avatar path")
+    tmp = dest.with_name(dest.name + f".{uuid.uuid4().hex}.tmp")
+    remaining = length
+    try:
+        with tmp.open("wb") as handle:
+            while remaining:
+                data = stream.read(min(1024 * 1024, remaining))
+                if not data:
+                    raise IOError("Unexpected end of avatar upload")
+                handle.write(data)
+                remaining -= len(data)
+        tmp.replace(dest)
+    finally:
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+    return dest.name
+
+
+def background_files(force=False):
+    now = time.monotonic()
+    if not force and BACKGROUND_CACHE["files"] and now - BACKGROUND_CACHE["ts"] < 10.0:
+        return list(BACKGROUND_CACHE["files"])
+    allowed = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".avif"}
+    (ROOT / "backgrounds").mkdir(parents=True, exist_ok=True)
+    # Only documented background locations are supported. Scanning ROOT with
+    # rglob used to walk hundreds of megabytes on the first panel request.
+    dirs = [
+        ROOT / "backgrounds",
+        ROOT / "images" / "XR Animator" / "backgrounds",
+        ROOT / "images" / "XR_Animator" / "backgrounds",
+    ]
+
+    found = {}
+    root_resolved = ROOT.resolve()
+    for directory in dirs:
+        try:
+            directory = directory.resolve()
+            if directory != root_resolved and root_resolved not in directory.parents:
+                continue
+            if not directory.is_dir():
+                continue
+            for file in directory.rglob("*"):
+                if file.is_file() and file.suffix.lower() in allowed:
+                    rel = file.resolve().relative_to(root_resolved).as_posix()
+                    found[rel.lower()] = rel
+        except Exception:
+            pass
+    files = [found[key] for key in sorted(found)]
+    BACKGROUND_CACHE["ts"] = now
+    BACKGROUND_CACHE["files"] = list(files)
+    return files
+
+
+def save_stage_upload(filename, stream, length):
+    name = Path(unquote(str(filename or ""))).name
+    ext = Path(name).suffix.lower()
+    if ext not in {".glb", ".gltf", ".pmx", ".zip", ".fbx"}:
+        raise ValueError("Invalid stage extension")
+    stem = re.sub(r"[<>:\"/\\|?*\x00-\x1f]+", "_", Path(name).stem).strip().strip(".")
+    stem = (stem or "stage")[:160]
+    name = stem + ext
+    if length <= 0 or length > AVATAR_MAX_BYTES:
+        raise ValueError("Invalid stage size")
+    folder = ROOT / "stages"
+    folder.mkdir(parents=True, exist_ok=True)
+    dest = (folder / name).resolve()
+    if dest.parent != folder:
+        raise ValueError("Invalid stage path")
+    import uuid
+    tmp = dest.with_name(dest.name + f".{uuid.uuid4().hex}.tmp")
+    remaining = length
+    try:
+        with tmp.open("wb") as handle:
+            while remaining:
+                data = stream.read(min(1024 * 1024, remaining))
+                if not data:
+                    raise IOError("Unexpected end of stage upload")
+                handle.write(data)
+                remaining -= len(data)
+        tmp.replace(dest)
+        STAGE_CACHE["ts"] = 0.0 # invalidate cache
+        STAGE_CACHE["files"] = []
+    finally:
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+    return dest.name
+
+
+def stage_files(force=False):
+    now = time.monotonic()
+    if force:
+        STAGE_CACHE["ts"] = 0.0
+        STAGE_CACHE["files"] = []
+    elif STAGE_CACHE["files"] and now - STAGE_CACHE["ts"] < 10.0:
+        return list(STAGE_CACHE["files"])
+    allowed = {".glb", ".gltf", ".pmx", ".zip", ".fbx"}
+    (ROOT / "stages").mkdir(parents=True, exist_ok=True)
+    dirs = [ROOT / "stages"]
+    found = {}
+    root_resolved = ROOT.resolve()
+    for directory in dirs:
+        try:
+            directory = directory.resolve()
+            if directory != root_resolved and root_resolved not in directory.parents:
+                continue
+            if not directory.is_dir():
+                continue
+            for file in directory.rglob("*"):
+                if file.is_file() and file.suffix.lower() in allowed:
+                    rel = file.resolve().relative_to(root_resolved).as_posix()
+                    found[rel.lower()] = rel
+        except Exception:
+            pass
+    files = [found[key] for key in sorted(found)]
+    STAGE_CACHE["ts"] = now
+    STAGE_CACHE["files"] = list(files)
+    return files
+
+
+def prop_files(force=False):
+    now = time.monotonic()
+    if not force and PROP_CACHE["files"] and now - PROP_CACHE["ts"] < 10.0:
+        return list(PROP_CACHE["files"])
+    allowed = {".glb", ".gltf", ".pmx", ".x", ".fbx"}
+    (ROOT / "props").mkdir(parents=True, exist_ok=True)
+    dirs = [ROOT / "props"]
+    found = {}
+    root_resolved = ROOT.resolve()
+    for directory in dirs:
+        try:
+            directory = directory.resolve()
+            if directory != root_resolved and root_resolved not in directory.parents:
+                continue
+            if not directory.is_dir():
+                continue
+            for file in directory.rglob("*"):
+                if file.is_file() and file.suffix.lower() in allowed:
+                    rel = file.resolve().relative_to(root_resolved).as_posix()
+                    found[rel.lower()] = rel
+        except Exception:
+            pass
+    files = [found[key] for key in sorted(found)]
+    PROP_CACHE["ts"] = now
+    PROP_CACHE["files"] = list(files)
+    return files
+
+
+def safe_recording_name(name):
+    name = str(name or "recording")
+    name = re.sub(r'[<>:"/\\|?*\x00-\x1f]+', "_", name).strip().strip(".")
+    # The UI already chooses the container separately. Accept users typing
+    # podcast.mp4 without producing podcast.mp4.mp4.
+    name = re.sub(r'(?i)\.(?:mp4|webm|mkv|flac|wav|opus)$', '', name).rstrip('.')
+    return (name or "recording")[:160]
+
+
+def source_extension_for_mime(mime_type, fallback="webm"):
+    mime_type = str(mime_type or "").lower()
+    if "mp4" in mime_type:
+        return ".mp4"
+    if "webm" in mime_type:
+        return ".webm"
+    if "ogg" in mime_type or "opus" in mime_type:
+        return ".opus"
+    # Chromium can report an empty MediaRecorder mimeType when it chooses the
+    # default internally. Never create opaque .bin podcast files.
+    fallback = str(fallback or "webm").lower().lstrip(".")
+    return "." + (fallback if fallback in {"webm", "mp4", "opus"} else "webm")
+
+
+def final_extension(output_format, mode):
+    fmt = str(output_format or "webm").lower()
+    if fmt == "mp4": return ".mp4"
+    if fmt == "mkv": return ".mkv"
+    if fmt == "flac": return ".flac"
+    if fmt == "wav": return ".wav"
+    if fmt == "opus": return ".opus"
+    return ".webm"
+
+
+def resolve_output_dir(value):
+    if not value:
+        target = RECORDINGS_DIR
+    else:
+        target = Path(os.path.expandvars(os.path.expanduser(str(value))))
+        if not target.is_absolute():
+            target = (ROOT / target).resolve()
+    target.mkdir(parents=True, exist_ok=True)
+    target = target.resolve()
+    probe = target / f".xra_write_test_{uuid.uuid4().hex}"
+    try:
+        probe.write_bytes(b"")
+        probe.unlink(missing_ok=True)
+    except Exception as exc:
+        raise PermissionError(f"Folder is not writable: {target} ({exc})")
+    return target
+
+
+def unique_path(folder, base, ext):
+    target = folder / (base + ext)
+    index = 2
+    while target.exists():
+        target = folder / f"{base}_{index}{ext}"
+        index += 1
+    return target
+
+
+def _usable_initial_dir(initial=""):
+    try:
+        candidate = Path(os.path.expandvars(os.path.expanduser(str(initial or ""))))
+        if candidate.is_dir():
+            return str(candidate.resolve())
+    except Exception:
+        pass
+    RECORDINGS_DIR.mkdir(parents=True, exist_ok=True)
+    return str(RECORDINGS_DIR.resolve())
+
+
+
+def _linux_gui_env():
+    """Best-effort GUI environment for folder pickers launched by the local server.
+
+    Some Linux launchers start the Python server with a reduced environment.
+    Recover DISPLAY/Wayland/DBus values from parent processes when possible.
+    """
+    env = os.environ.copy()
+    keys = {
+        "DISPLAY", "WAYLAND_DISPLAY", "XAUTHORITY", "DBUS_SESSION_BUS_ADDRESS",
+        "XDG_RUNTIME_DIR", "XDG_CURRENT_DESKTOP", "DESKTOP_SESSION", "GDK_BACKEND",
+    }
+    missing = {key for key in keys if not env.get(key)}
+    if missing and sys.platform.startswith("linux"):
+        pid = os.getppid()
+        for _ in range(5):
+            try:
+                raw = Path(f"/proc/{pid}/environ").read_bytes()
+                parent = {}
+                for item in raw.split(b"\0"):
+                    if b"=" not in item:
+                        continue
+                    key, value = item.split(b"=", 1)
+                    parent[key.decode(errors="ignore")] = value.decode(errors="ignore")
+                for key in list(missing):
+                    if parent.get(key):
+                        env[key] = parent[key]
+                        missing.discard(key)
+                stat = Path(f"/proc/{pid}/stat").read_text(errors="ignore").split()
+                pid = int(stat[3]) if len(stat) > 3 else 1
+                if pid <= 1 or not missing:
+                    break
+            except Exception:
+                break
+    return env
+
+def choose_folder_native(initial=""):
+    """Open a native folder picker from the local XR server process.
+
+    Linux is the primary target for XR Animator. Prefer the desktop-native
+    helper when available (KDE -> kdialog, otherwise zenity/yad/qarma), then
+    fall back to PyGObject GTK and finally tkinter. The selected path is
+    validated for writability before it is returned.
+    """
+    initial = _usable_initial_dir(initial)
+    errors = []
+
+    if sys.platform.startswith("win"):
+        escaped = initial.replace("'", "''")
+        ps = rf'''
+Add-Type -AssemblyName System.Windows.Forms
+$form = New-Object System.Windows.Forms.Form
+$form.TopMost = $true
+$form.ShowInTaskbar = $false
+$form.Opacity = 0
+$form.StartPosition = 'CenterScreen'
+$form.Width = 1; $form.Height = 1
+$form.Show()
+$dlg = New-Object System.Windows.Forms.FolderBrowserDialog
+$dlg.Description = 'Choose XR Animator recording folder'
+$dlg.ShowNewFolderButton = $true
+$dlg.SelectedPath = '{escaped}'
+$result = $dlg.ShowDialog($form)
+if ($result -eq [System.Windows.Forms.DialogResult]::OK) {{ Write-Output $dlg.SelectedPath }}
+$form.Close()
+'''
+        try:
+            result = subprocess.run(
+                ["powershell.exe", "-NoProfile", "-STA", "-ExecutionPolicy", "Bypass", "-Command", ps],
+                capture_output=True, text=True, timeout=180,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+            picked = [line.strip() for line in (result.stdout or "").splitlines() if line.strip()]
+            if picked:
+                return str(resolve_output_dir(picked[-1]))
+            if result.returncode:
+                errors.append((result.stderr or "PowerShell picker failed").strip())
+            else:
+                return ""
+        except Exception as exc:
+            errors.append(str(exc))
+
+    if sys.platform == "darwin":
+        try:
+            script = 'POSIX path of (choose folder with prompt "Choose XR Animator recording folder")'
+            result = subprocess.run(["osascript", "-e", script], capture_output=True, text=True, timeout=180)
+            if result.returncode == 0 and result.stdout.strip():
+                return str(resolve_output_dir(result.stdout.strip()))
+            if "User canceled" in (result.stderr or ""):
+                return ""
+            errors.append((result.stderr or "osascript picker failed").strip())
+        except Exception as exc:
+            errors.append(str(exc))
+
+    # Linux desktop picker. Chromium cannot reveal a real absolute path from
+    # showDirectoryPicker(), so the local server must own the native dialog.
+    if not sys.platform.startswith("win") and sys.platform != "darwin":
+        gui_env = _linux_gui_env()
+        desktop = (gui_env.get("XDG_CURRENT_DESKTOP") or gui_env.get("DESKTOP_SESSION") or "").lower()
+        initial_slash = initial.rstrip("/") + "/"
+        helpers = []
+        if "kde" in desktop or "plasma" in desktop:
+            helpers.append(("kdialog", ["kdialog", "--getexistingdirectory", initial, "--title", "Choose XR Animator recording folder"]))
+        helpers += [
+            ("zenity", ["zenity", "--file-selection", "--directory", "--modal", "--title=Choose XR Animator recording folder", f"--filename={initial_slash}"]),
+            ("yad", ["yad", "--file", "--directory", "--on-top", "--center", "--title=Choose XR Animator recording folder", f"--filename={initial_slash}"]),
+            ("qarma", ["qarma", "--file-selection", "--directory", "--modal", "--title=Choose XR Animator recording folder", f"--filename={initial_slash}"]),
+        ]
+        if not ("kde" in desktop or "plasma" in desktop):
+            helpers.append(("kdialog", ["kdialog", "--getexistingdirectory", initial, "--title", "Choose XR Animator recording folder"]))
+
+        attempted = set()
+        for name, command in helpers:
+            if name in attempted or not shutil.which(name):
+                continue
+            attempted.add(name)
+            try:
+                result = subprocess.run(command, capture_output=True, text=True, timeout=180, env=gui_env)
+                picked = (result.stdout or "").strip()
+                if result.returncode == 0 and picked:
+                    return str(resolve_output_dir(picked))
+                # Standard dialog cancellation codes: zenity/yad/qarma 1,
+                # kdialog 1. Cancellation is not an error.
+                if result.returncode == 1:
+                    return ""
+                errors.append(f"{name}: " + ((result.stderr or result.stdout or "picker failed").strip()))
+            except Exception as exc:
+                errors.append(f"{name}: {exc}")
+
+        # GTK fallback when python3-gi is installed but no CLI picker exists.
+        try:
+            import gi
+            gi.require_version("Gtk", "3.0")
+            from gi.repository import Gtk
+            dialog = Gtk.FileChooserDialog(
+                title="Choose XR Animator recording folder",
+                action=Gtk.FileChooserAction.SELECT_FOLDER,
+            )
+            dialog.add_buttons(Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL, Gtk.STOCK_OPEN, Gtk.ResponseType.OK)
+            try:
+                dialog.set_current_folder(initial)
+            except Exception:
+                pass
+            response = dialog.run()
+            picked = dialog.get_filename() if response == Gtk.ResponseType.OK else ""
+            dialog.destroy()
+            while Gtk.events_pending():
+                Gtk.main_iteration_do(False)
+            return str(resolve_output_dir(picked)) if picked else ""
+        except Exception as exc:
+            errors.append(f"GTK: {exc}")
+
+    try:
+        import tkinter as tk
+        from tkinter import filedialog
+        root = tk.Tk(); root.withdraw()
+        try:
+            root.attributes('-topmost', True); root.update()
+        except Exception:
+            pass
+        picked = filedialog.askdirectory(initialdir=initial, title='Choose XR Animator recording folder', mustexist=False)
+        root.destroy()
+        return str(resolve_output_dir(picked)) if picked else ""
+    except Exception as exc:
+        errors.append(f"tkinter: {exc}")
+
+    display_hint = ""
+    if sys.platform.startswith("linux"):
+        env = _linux_gui_env()
+        if not (env.get("DISPLAY") or env.get("WAYLAND_DISPLAY")):
+            display_hint = " No DISPLAY/WAYLAND_DISPLAY was visible to xr_server.py; launch it from the same desktop session as XR Animator."
+    hint = "On Linux install one of: zenity, kdialog or yad; or type/paste an absolute path in Recording folder." + display_hint
+    raise RuntimeError("Native folder picker unavailable. " + hint + " Details: " + " | ".join(e for e in errors if e)[-1500:])
+
+
+def _safe_debug_log_name(value):
+    name = Path(str(value or "xra-debug.json")).name
+    name = re.sub(r"[^A-Za-z0-9._-]+", "_", name).strip("._") or "xra-debug"
+    if not name.lower().endswith(".json"):
+        name += ".json"
+    return name[:180]
+
+
+def _debug_save_target(value, suggested_name):
+    if not value:
+        return None
+    target = Path(os.path.expandvars(os.path.expanduser(str(value))))
+    if not target.is_absolute():
+        raise ValueError("Debug log save path must be absolute")
+    if target.suffix.lower() != ".json":
+        target = target.with_name(target.name + ".json")
+    target = target.resolve()
+    if not target.parent.is_dir():
+        raise ValueError(f"Destination folder does not exist: {target.parent}")
+    return target
+
+
+def choose_debug_log_file_native(suggested_name="xra-debug.json"):
+    """Open a native Save As dialog and return the selected JSON path."""
+    suggested_name = _safe_debug_log_name(suggested_name)
+    downloads = Path.home() / "Downloads"
+    initial_dir = downloads if downloads.is_dir() else Path.home()
+    initial_path = str((initial_dir / suggested_name).resolve())
+    errors = []
+
+    if sys.platform.startswith("win"):
+        escaped_path = initial_path.replace("'", "''")
+        ps = rf'''
+Add-Type -AssemblyName System.Windows.Forms
+$form = New-Object System.Windows.Forms.Form
+$form.TopMost = $true
+$form.ShowInTaskbar = $false
+$form.Opacity = 0
+$form.StartPosition = 'CenterScreen'
+$form.Width = 1; $form.Height = 1
+$form.Show()
+$dlg = New-Object System.Windows.Forms.SaveFileDialog
+$dlg.Title = 'Save XR Animator debug log'
+$dlg.Filter = 'JSON files (*.json)|*.json'
+$dlg.FileName = '{escaped_path}'
+$dlg.OverwritePrompt = $true
+$result = $dlg.ShowDialog($form)
+if ($result -eq [System.Windows.Forms.DialogResult]::OK) {{ Write-Output $dlg.FileName }}
+$form.Close()
+'''
+        try:
+            result = subprocess.run(
+                ["powershell.exe", "-NoProfile", "-STA", "-ExecutionPolicy", "Bypass", "-Command", ps],
+                capture_output=True, text=True, timeout=180,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+            picked = [line.strip() for line in (result.stdout or "").splitlines() if line.strip()]
+            if picked:
+                return _debug_save_target(picked[-1], suggested_name)
+            if result.returncode:
+                errors.append((result.stderr or "PowerShell picker failed").strip())
+            else:
+                return None
+        except Exception as exc:
+            errors.append(str(exc))
+
+    if sys.platform == "darwin":
+        safe_name = suggested_name.replace('"', '\\"')
+        try:
+            script = f'POSIX path of (choose file name with prompt "Save XR Animator debug log" default name "{safe_name}")'
+            result = subprocess.run(["osascript", "-e", script], capture_output=True, text=True, timeout=180)
+            if result.returncode == 0 and result.stdout.strip():
+                return _debug_save_target(result.stdout.strip(), suggested_name)
+            if "User canceled" in (result.stderr or ""):
+                return None
+            errors.append((result.stderr or "osascript picker failed").strip())
+        except Exception as exc:
+            errors.append(str(exc))
+
+    if not sys.platform.startswith("win") and sys.platform != "darwin":
+        gui_env = _linux_gui_env()
+        desktop = (gui_env.get("XDG_CURRENT_DESKTOP") or gui_env.get("DESKTOP_SESSION") or "").lower()
+        helpers = []
+        if "kde" in desktop or "plasma" in desktop:
+            helpers.append(("kdialog", ["kdialog", "--getsavefilename", initial_path, "JSON files (*.json)", "--title", "Save XR Animator debug log"]))
+        helpers += [
+            ("zenity", ["zenity", "--file-selection", "--save", "--confirm-overwrite", "--modal", "--title=Save XR Animator debug log", f"--filename={initial_path}", "--file-filter=JSON files | *.json"]),
+            ("yad", ["yad", "--file", "--save", "--confirm-overwrite", "--on-top", "--center", "--title=Save XR Animator debug log", f"--filename={initial_path}", "--file-filter=JSON files | *.json"]),
+            ("qarma", ["qarma", "--file-selection", "--save", "--confirm-overwrite", "--modal", "--title=Save XR Animator debug log", f"--filename={initial_path}", "--file-filter=JSON files | *.json"]),
+        ]
+        if not ("kde" in desktop or "plasma" in desktop):
+            helpers.append(("kdialog", ["kdialog", "--getsavefilename", initial_path, "JSON files (*.json)", "--title", "Save XR Animator debug log"]))
+
+        attempted = set()
+        for name, command in helpers:
+            if name in attempted or not shutil.which(name):
+                continue
+            attempted.add(name)
+            try:
+                result = subprocess.run(command, capture_output=True, text=True, timeout=180, env=gui_env)
+                picked = (result.stdout or "").strip()
+                if result.returncode == 0 and picked:
+                    return _debug_save_target(picked, suggested_name)
+                if result.returncode == 1:
+                    return None
+                errors.append(f"{name}: " + ((result.stderr or result.stdout or "picker failed").strip()))
+            except Exception as exc:
+                errors.append(f"{name}: {exc}")
+
+        try:
+            import gi
+            gi.require_version("Gtk", "3.0")
+            from gi.repository import Gtk
+            dialog = Gtk.FileChooserDialog(
+                title="Save XR Animator debug log",
+                action=Gtk.FileChooserAction.SAVE,
+            )
+            dialog.add_buttons(Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL, Gtk.STOCK_SAVE, Gtk.ResponseType.OK)
+            dialog.set_do_overwrite_confirmation(True)
+            dialog.set_current_folder(str(initial_dir))
+            dialog.set_current_name(suggested_name)
+            json_filter = Gtk.FileFilter(); json_filter.set_name("JSON files"); json_filter.add_pattern("*.json")
+            dialog.add_filter(json_filter)
+            response = dialog.run()
+            picked = dialog.get_filename() if response == Gtk.ResponseType.OK else ""
+            dialog.destroy()
+            while Gtk.events_pending():
+                Gtk.main_iteration_do(False)
+            return _debug_save_target(picked, suggested_name)
+        except Exception as exc:
+            errors.append(f"GTK: {exc}")
+
+    try:
+        import tkinter as tk
+        from tkinter import filedialog
+        root = tk.Tk(); root.withdraw()
+        try:
+            root.attributes('-topmost', True); root.update()
+        except Exception:
+            pass
+        picked = filedialog.asksaveasfilename(
+            initialdir=str(initial_dir), initialfile=suggested_name,
+            title='Save XR Animator debug log', defaultextension='.json',
+            filetypes=[('JSON files', '*.json')], confirmoverwrite=True,
+        )
+        root.destroy()
+        return _debug_save_target(picked, suggested_name)
+    except Exception as exc:
+        errors.append(f"tkinter: {exc}")
+
+    display_hint = ""
+    if sys.platform.startswith("linux"):
+        env = _linux_gui_env()
+        if not (env.get("DISPLAY") or env.get("WAYLAND_DISPLAY")):
+            display_hint = " No DISPLAY/WAYLAND_DISPLAY was visible to xr_server.py."
+    raise RuntimeError("Native Save As dialog unavailable." + display_hint + " Details: " + " | ".join(e for e in errors if e)[-1500:])
+
+
+def save_debug_log_native(suggested_name, content):
+    payload = json.loads(content)
+    if not isinstance(payload, dict) or payload.get("schema") != "xra-debug-session/v1":
+        raise ValueError("Invalid XR Animator debug log")
+    target = choose_debug_log_file_native(suggested_name)
+    if target is None:
+        return None
+    temporary = target.with_name(f".{target.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        temporary.write_text(content, encoding="utf-8")
+        os.replace(temporary, target)
+    finally:
+        temporary.unlink(missing_ok=True)
+    return target
+
+
+
+def find_ffmpeg():
+    """Resolve FFmpeg robustly for Linux desktop launches with a restricted PATH."""
+    candidates = []
+    env_path = os.environ.get("XRA_FFMPEG", "").strip()
+    if env_path:
+        candidates.append(env_path)
+    found = shutil.which("ffmpeg")
+    if found:
+        candidates.append(found)
+    candidates.extend([
+        "/usr/bin/ffmpeg",
+        "/usr/local/bin/ffmpeg",
+        "/bin/ffmpeg",
+        "/snap/bin/ffmpeg",
+        str(Path.home() / ".local/bin/ffmpeg"),
+    ])
+    seen = set()
+    for candidate in candidates:
+        candidate = str(candidate or "").strip()
+        if not candidate or candidate in seen:
+            continue
+        seen.add(candidate)
+        path = Path(candidate).expanduser()
+        try:
+            if path.is_file() and os.access(path, os.X_OK):
+                return str(path.resolve())
+        except Exception:
+            pass
+    return None
+
+_cached_encoders = None
+
+def ffmpeg_encoders():
+    global _cached_encoders
+    if _cached_encoders is not None:
+        return _cached_encoders
+    ffmpeg = find_ffmpeg()
+    result = {"ffmpeg": bool(ffmpeg), "ffmpeg_path": ffmpeg or "", "h264": [], "recommended": "libx264"}
+    if not ffmpeg:
+        return result
+    try:
+        proc = subprocess.run([ffmpeg, "-hide_banner", "-encoders"], capture_output=True, text=True, timeout=12)
+        text = (proc.stdout or "") + "\n" + (proc.stderr or "")
+        candidates = ["h264_nvenc", "h264_qsv", "h264_amf", "h264_videotoolbox", "libx264"]
+        compiled = [enc for enc in candidates if re.search(rf"\b{re.escape(enc)}\b", text)]
+        working = []
+        for enc in compiled:
+            if enc == "libx264":
+                working.append(enc)
+                continue
+            try:
+                test_proc = subprocess.run(
+                    [ffmpeg, "-hide_banner", "-loglevel", "quiet", "-f", "lavfi", "-i", "nullsrc=s=1280x720:d=0.04", "-c:v", enc, "-f", "null", "-"],
+                    capture_output=True, text=True, timeout=5
+                )
+                if test_proc.returncode == 0:
+                    working.append(enc)
+            except Exception:
+                pass
+        result["h264"] = working
+        for enc in ["h264_nvenc", "h264_qsv", "h264_amf", "h264_videotoolbox", "libx264"]:
+            if enc in result["h264"]:
+                result["recommended"] = enc
+                break
+    except Exception:
+        pass
+    _cached_encoders = result
+    return result
+
+
+def _manifest_path(session):
+    return RECORDING_MANIFEST_DIR / f"{session}.json"
+
+
+def write_recording_manifest(session, info, error=""):
+    try:
+        payload = {
+            "session": session, "path": str(info.get("path", "")), "final_path": str(info.get("final_path", "")),
+            "bytes": int(info.get("bytes") or 0), "started": float(info.get("started") or time.time()),
+            "output_format": info.get("output_format", "webm"), "mode": info.get("mode", "video_audio"),
+            "video_bps": int(info.get("video_bps") or 0), "audio_bps": int(info.get("audio_bps") or 0),
+            "hardware_encode": info.get("hardware_encode", "auto"), "error": str(error or ""),
+        }
+        tmp = _manifest_path(session).with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        tmp.replace(_manifest_path(session))
+    except Exception as exc:
+        print(f"[XRA] recording manifest write failed: {exc}")
+
+
+def delete_recording_manifest(session):
+    try:
+        _manifest_path(session).unlink(missing_ok=True)
+    except Exception:
+        pass
+
+
+def recovery_list():
+    out = []
+    for manifest in RECORDING_MANIFEST_DIR.glob("*.json"):
+        try:
+            obj = json.loads(manifest.read_text(encoding="utf-8"))
+            source = Path(obj.get("path") or "")
+            final = Path(obj.get("final_path") or "")
+            if not source.exists() and final.exists():
+                manifest.unlink(missing_ok=True); continue
+            if not source.exists():
+                continue
+            obj["bytes"] = source.stat().st_size
+            obj["seconds"] = max(0.0, time.time() - float(obj.get("started") or time.time()))
+            out.append(obj)
+        except Exception:
+            continue
+    out.sort(key=lambda x: x.get("started", 0), reverse=True)
+    return out
+
+
+def _run_ffmpeg_with_fallback(base_cmd, output_path, requested="auto"):
+    enc = ffmpeg_encoders(); available = enc.get("h264", [])
+    requested = str(requested or "auto").lower()
+    if requested == "auto":
+        candidates = [x for x in [enc.get("recommended"), "libx264"] if x]
+    elif requested in available:
+        candidates = [requested, "libx264"] if requested != "libx264" else ["libx264"]
+    else:
+        candidates = ["libx264"]
+    seen = set(); last_err = ""
+    for encoder in candidates:
+        if encoder in seen: continue
+        seen.add(encoder); cmd = list(base_cmd)
+        if encoder == "libx264": cmd += ["-c:v", encoder, "-preset", "medium"]
+        elif encoder == "h264_nvenc": cmd += ["-c:v", encoder, "-preset", "p5"]
+        elif encoder == "h264_qsv": cmd += ["-c:v", encoder, "-preset", "medium"]
+        elif encoder == "h264_amf": cmd += ["-c:v", encoder, "-quality", "quality"]
+        else: cmd += ["-c:v", encoder]
+        cmd += [str(output_path)]
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode == 0: return encoder
+        last_err = (result.stderr or "FFmpeg conversion failed").strip()[-3000:]
+        try: Path(output_path).unlink(missing_ok=True)
+        except Exception: pass
+        if requested != "auto": break
+    raise RuntimeError(last_err or "FFmpeg H.264 conversion failed")
+
+
+def convert_recording(info):
+    source = Path(info["path"]); final = Path(info["final_path"]); fmt = str(info.get("output_format", "webm")).lower()
+    if source == final: return final
+    ffmpeg = find_ffmpeg()
+    if not ffmpeg: raise RuntimeError("FFmpeg is required for this output format. Checked PATH and common Linux locations (/usr/bin, /usr/local/bin, /snap/bin).")
+    mode = info.get("mode", "video_audio")
+    video_bps = max(100000, int(info.get("video_bps") or 3000000)); audio_bps = max(32000, int(info.get("audio_bps") or 128000))
+    common = [ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-i", str(source)]
+    if fmt == "mkv":
+        result = subprocess.run(common + ["-map", "0", "-c", "copy", str(final)], capture_output=True, text=True)
+        if result.returncode != 0: raise RuntimeError((result.stderr or "FFmpeg MKV remux failed").strip()[-3000:])
+    elif fmt == "mp4":
+        if mode == "audio":
+            result = subprocess.run(common + ["-vn", "-c:a", "aac", "-b:a", str(audio_bps), "-movflags", "+faststart", str(final)], capture_output=True, text=True)
+            if result.returncode != 0: raise RuntimeError((result.stderr or "FFmpeg MP4 audio conversion failed").strip()[-3000:])
+        elif mode == "video":
+            _run_ffmpeg_with_fallback(common + ["-an", "-b:v", str(video_bps), "-pix_fmt", "yuv420p", "-movflags", "+faststart"], final, info.get("hardware_encode", "auto"))
+        else:
+            _run_ffmpeg_with_fallback(common + ["-b:v", str(video_bps), "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", str(audio_bps), "-movflags", "+faststart"], final, info.get("hardware_encode", "auto"))
+    elif fmt == "flac":
+        result = subprocess.run(common + ["-vn", "-c:a", "flac", str(final)], capture_output=True, text=True)
+        if result.returncode != 0: raise RuntimeError((result.stderr or "FFmpeg FLAC conversion failed").strip()[-3000:])
+    elif fmt == "wav":
+        result = subprocess.run(common + ["-vn", "-c:a", "pcm_s16le", str(final)], capture_output=True, text=True)
+        if result.returncode != 0: raise RuntimeError((result.stderr or "FFmpeg WAV conversion failed").strip()[-3000:])
+    elif fmt == "opus":
+        result = subprocess.run(common + ["-vn", "-c:a", "libopus", "-b:a", str(audio_bps), str(final)], capture_output=True, text=True)
+        if result.returncode != 0: raise RuntimeError((result.stderr or "FFmpeg Opus conversion failed").strip()[-3000:])
+    else: raise RuntimeError(f"Unsupported output format: {fmt}")
+    if not final.exists() or final.stat().st_size <= 0: raise RuntimeError(f"Final recording was not created: {final}")
+    try: source.unlink(missing_ok=True)
+    except Exception: pass
+    return final
+
+
+def finalize_native_recording(video_info, audio_info=None):
+    """Finalize XR Animator native video, optionally replacing its audio with XRA processed mic.
+
+    The native recorder supplies the high-quality video source. XRA's audio engine can
+    supply the podcast/gated audio track. Keeping these paths separate avoids the
+    browser screen-share/rescale path while preserving filename/folder/MP4 controls.
+    """
+    video = Path(video_info["path"])
+    final = Path(video_info["final_path"])
+    fmt = str(video_info.get("output_format") or "webm").lower()
+    audio = Path(audio_info["path"]) if audio_info else None
+    video_bps = max(100000, int(video_info.get("video_bps") or 3000000))
+    audio_bps = max(32000, int(video_info.get("audio_bps") or 128000))
+
+    if not video.exists() or video.stat().st_size <= 0:
+        raise RuntimeError(f"Native XR video source is missing or empty: {video}")
+
+    if audio is None:
+        if fmt == "webm":
+            final.parent.mkdir(parents=True, exist_ok=True)
+            if final.exists(): final.unlink()
+            shutil.move(str(video), str(final))
+            return final
+        return convert_recording(video_info)
+
+    if not audio.exists() or audio.stat().st_size <= 0:
+        raise RuntimeError(f"XRA processed audio source is missing or empty: {audio}")
+    ffmpeg = find_ffmpeg()
+    if not ffmpeg:
+        raise RuntimeError("FFmpeg is required to mux XRA processed audio with native XR video.")
+
+    common = [ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
+              "-i", str(video), "-i", str(audio), "-map", "0:v:0", "-map", "1:a:0", "-shortest"]
+
+    if fmt == "mp4":
+        _run_ffmpeg_with_fallback(
+            common + ["-b:v", str(video_bps), "-pix_fmt", "yuv420p",
+                      "-c:a", "aac", "-b:a", str(audio_bps), "-movflags", "+faststart"],
+            final, video_info.get("hardware_encode", "auto")
+        )
+    elif fmt == "mkv":
+        cmd = common + ["-c:v", "copy", "-c:a", "libopus", "-b:a", str(audio_bps), str(final)]
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            raise RuntimeError((result.stderr or "FFmpeg native MKV mux failed").strip()[-3000:])
+    elif fmt == "webm":
+        # First try a lossless video stream-copy so the old native recorder quality is
+        # preserved exactly. Re-encode only when the native codec is not WebM-compatible.
+        cmd = common + ["-c:v", "copy", "-c:a", "libopus", "-b:a", str(audio_bps), str(final)]
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            try: final.unlink(missing_ok=True)
+            except Exception: pass
+            cmd = common + ["-c:v", "libvpx-vp9", "-b:v", str(video_bps),
+                            "-deadline", "good", "-cpu-used", "2",
+                            "-c:a", "libopus", "-b:a", str(audio_bps), str(final)]
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            if result.returncode != 0:
+                raise RuntimeError((result.stderr or "FFmpeg native WebM mux failed").strip()[-3000:])
+    else:
+        raise RuntimeError(f"Unsupported native output format: {fmt}")
+
+    if not final.exists() or final.stat().st_size <= 0:
+        raise RuntimeError(f"Final native recording was not created: {final}")
+    try: video.unlink(missing_ok=True)
+    except Exception: pass
+    try: audio.unlink(missing_ok=True)
+    except Exception: pass
+    return final
+
+
+_proc_cpu_last_time = 0.0
+_proc_cpu_last_monotonic = 0.0
+_proc_cpu_percent = 0.0
+_proc_metrics_lock = threading.Lock()
+_proc_memory_samples = []
+_proc_vram_last_at = 0.0
+_proc_vram_mb = 0.0
+
+
+def _memory_slope(samples, index: int) -> float:
+    if len(samples) < 2:
+        return 0.0
+    first, last = samples[0], samples[-1]
+    minutes = (last[0] - first[0]) / 60.0
+    if minutes < (10.0 / 60.0):
+        return 0.0
+    return round((last[index] - first[index]) / minutes, 2)
+
+
+def _process_vram_mb(now: float) -> float:
+    global _proc_vram_last_at, _proc_vram_mb
+    if now - _proc_vram_last_at < 4.0:
+        return _proc_vram_mb
+    _proc_vram_last_at = now
+    try:
+        result = subprocess.run(
+            ["nvidia-smi", "--query-compute-apps=pid,used_gpu_memory",
+             "--format=csv,noheader,nounits"],
+            capture_output=True,
+            text=True,
+            timeout=1.5,
+            check=False,
+        )
+        total = 0.0
+        for line in result.stdout.splitlines():
+            fields = [field.strip() for field in line.split(",")]
+            if len(fields) >= 2 and int(fields[0]) == os.getpid():
+                total += float(fields[1])
+        _proc_vram_mb = round(total, 1)
+    except Exception:
+        pass
+    return _proc_vram_mb
+
+def get_process_metrics() -> dict:
+    global _proc_cpu_last_time, _proc_cpu_last_monotonic, _proc_cpu_percent
+    with _proc_metrics_lock:
+        now = time.monotonic()
+        times = os.times()
+        total_cpu = times.user + times.system
+        if _proc_cpu_last_monotonic > 0:
+            dt = now - _proc_cpu_last_monotonic
+            if dt >= 0.2:
+                dcpu = total_cpu - _proc_cpu_last_time
+                _proc_cpu_percent = round((dcpu / dt) * 100.0, 1)
+                _proc_cpu_last_time = total_cpu
+                _proc_cpu_last_monotonic = now
+        else:
+            _proc_cpu_last_time = total_cpu
+            _proc_cpu_last_monotonic = now
+
+        rss_mb = 0.0
+        try:
+            with open("/proc/self/status", "r") as f:
+                for line in f:
+                    if line.startswith("VmRSS:"):
+                        rss_mb = round(int(line.split()[1]) / 1024.0, 1)
+                        break
+        except Exception:
+            pass
+
+        return {
+            "pid": os.getpid(),
+            "cpu_percent": _proc_cpu_percent,
+            "rss_mb": rss_mb,
+            "threads": threading.active_count(),
+            "cores": os.cpu_count() or 1,
+        }
+
+
+class Handler(SimpleHTTPRequestHandler):
+    # Required for the /__xra_backend/ws WebSocket upgrade: BaseHTTPRequestHandler
+    # defaults to HTTP/1.0, which marks the connection non-persistent and tears
+    # the socket down after the handshake response. The client's onopen still
+    # fires (so the bridge logs "connected"), but the server's subsequent
+    # {type:"pose"} frames never reach it -> lastPose stays null -> the native
+    # branch is never taken and the rig shows nothing. HTTP/1.1 keeps the socket
+    # alive for the long-lived bidirectional WS frame stream.
+    protocol_version = "HTTP/1.1"
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, directory=str(ROOT), **kwargs)
+
+    def log_message(self, format, *args):
+        if os.environ.get("XRA_VERBOSE", "0") in {"1", "true", "yes", "on"}:
+            super().log_message(format, *args)
+
+    def end_headers(self):
+        path = urlparse(self.path).path
+        if path.startswith("/__xra_"):
+            self.send_header("Cache-Control", "no-store, no-cache, must-revalidate")
+        else:
+            suffix = Path(path).suffix.lower()
+            if suffix in {".task", ".wasm"}:
+                # Truly immutable ML model assets: avoid re-downloading on every reload.
+                self.send_header("Cache-Control", "public, max-age=86400")
+            elif suffix in {".vrm", ".glb", ".gltf", ".fbx", ".bin"}:
+                # Stage/avatar assets that the user may regenerate: do not store in disk cache!
+                self.send_header("Cache-Control", "no-store, no-cache, must-revalidate")
+            else:
+                # Code stays easy to iterate on: browser may cache but must revalidate.
+                self.send_header("Cache-Control", "no-cache")
+        self.send_header("Permissions-Policy", "unload=*")
+        super().end_headers()
+
+    def send_json(self, obj, status=200):
+        data = json.dumps(obj, ensure_ascii=False).encode("utf-8")
+        try:
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+        except (BrokenPipeError, ConnectionResetError):
+            pass   # client reloaded / disconnected before we finished writing
+
+    def send_js(self, text, status=200):
+        data = text.encode("utf-8")
+        try:
+            self.send_response(status)
+            self.send_header("Content-Type", "application/javascript; charset=utf-8")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+
+    def do_GET(self):
+        path = urlparse(self.path).path
+
+        if path == "/__xra_obs/camera.mjpg":
+            self._serve_obs_camera_preview()
+            return
+
+        # Native mocap backend: WebSocket upgrade and JSON status routes.
+        if path == "/__xra_backend/ws":
+            if BACKENDS_OK and backend_server.maybe_upgrade(self):
+                return
+            self.send_error(404, "Backend websocket unavailable")
+            return
+
+        if path == "/__xra_backend/status":
+            self.send_json(self._backend_status())
+            return
+
+        if path == "/__xra_backend/list":
+            if not BACKENDS_OK:
+                self.send_json({"ok": False, "error": "backends module failed to import",
+                                "detail": _BACKENDS_IMPORT_ERROR}, status=500)
+                return
+            self.send_json({"ok": True, "backends": backend_registry.list_backends(),
+                            "active": backend_engine.ENGINE.status()})
+            return
+
+        if path.startswith("/__xra_avatar/"):
+            avatar = avatar_file(path.removeprefix("/__xra_avatar/"))
+            if not avatar:
+                self.send_error(404, "Saved avatar not found")
+                return
+            try:
+                size = avatar.stat().st_size
+                content_type = {
+                    ".gltf": "model/gltf+json",
+                    ".glb": "model/gltf-binary",
+                    ".vrm": "model/gltf-binary",
+                }.get(avatar.suffix.lower(), "application/octet-stream")
+                self.send_response(200)
+                self.send_header("Content-Type", content_type)
+                self.send_header("Content-Length", str(size))
+                self.send_header("Content-Disposition", f'inline; filename="{avatar.name}"')
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                with avatar.open("rb") as handle:
+                    shutil.copyfileobj(handle, self.wfile, length=1024 * 1024)
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+            return
+
+        if path == "/favicon.ico":
+            ico = ROOT / "icon_SA.ico"
+            if ico.exists():
+                data = ico.read_bytes()
+                self.send_response(200)
+                self.send_header("Content-Type", "image/x-icon")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+            else:
+                self.send_response(204)
+                self.end_headers()
+            return
+
+        if path == "/__xra_boot_profile.js":
+            payload = json.dumps(load_profile(), ensure_ascii=False, separators=(",", ":"))
+            payload = payload.replace("</", "<\\/")
+            self.send_js("window.__XRA_BOOT_PROFILE__=" + payload + ";\n")
+            return
+
+        if path == "/__xra_profile":
+            self.send_json(load_profile())
+            return
+
+        if path == "/__xra_config":
+            self.send_json(load_profile().get("custom", DEFAULT_CUSTOM))
+            return
+
+        if path == "/__xra_backgrounds":
+            query = urlparse(self.path).query
+            files = background_files(force="refresh=1" in query)
+            self.send_json({"files": files, "count": len(files)})
+            return
+
+        if path == "/__xra_avatars":
+            files = avatar_files()
+            self.send_json({"ok": True, "files": files, "count": len(files)})
+            return
+
+        if path == "/__xra_stages":
+            query = urlparse(self.path).query
+            files = stage_files(force="refresh=1" in query)
+            self.send_json({"files": files, "count": len(files)})
+            return
+
+        if path == "/__xra_props":
+            query = urlparse(self.path).query
+            files = prop_files(force="refresh=1" in query)
+            self.send_json({"files": files, "count": len(files)})
+            return
+
+        if path == "/__xra_recording/capabilities":
+            caps = ffmpeg_encoders()
+            caps.update({"default_dir": str(RECORDINGS_DIR.resolve()), "recoveries": len(recovery_list())})
+            self.send_json(caps)
+            return
+
+        if path == "/__xra_recording/recoveries":
+            self.send_json({"ok": True, "items": recovery_list()})
+            return
+
+        if path == "/__xra_recording/active-status":
+            try:
+                with RECORDING_LOCK:
+                    active = len(RECORDING_SESSIONS) > 0
+                    if active:
+                        first_session = next(iter(RECORDING_SESSIONS.values()))
+                        started = first_session.get("started", time.time())
+                        elapsed_ms = int(max(0.0, time.time() - started) * 1000)
+                        p = str(first_session.get("final_path") or first_session.get("path") or "")
+                        folder = str(Path(p).parent) if p else str(RECORDINGS_DIR.resolve())
+                        self.send_json({
+                            "ok": True, "active": True, "elapsed_ms": elapsed_ms,
+                            "path": p, "output_dir": folder
+                        })
+                    else:
+                        self.send_json({
+                            "ok": True, "active": False, "elapsed_ms": 0, "path": "",
+                            "output_dir": str(RECORDINGS_DIR.resolve())
+                        })
+            except Exception as exc:
+                self.send_json({"ok": False, "error": str(exc)}, status=400)
+            return
+
+        super().do_GET()
+
+    def _serve_obs_camera_preview(self):
+        """Stream the camera already owned by the mocap process to OBS."""
+        if not BACKENDS_OK:
+            self.send_error(503, "Native camera backend unavailable")
+            return
+        try:
+            from xra_backends import capture as backend_capture
+            source = backend_capture.CAPTURE
+            if not source.begin_obs_preview():
+                self.send_error(404, "OBS camera preview is disabled")
+                return
+        except Exception as exc:
+            self.send_error(503, f"OBS camera preview unavailable: {exc}")
+            return
+
+        try:
+            try:
+                import cv2
+
+                def encode_jpeg(frame, jpeg_quality):
+                    ok, encoded = cv2.imencode(
+                        ".jpg", frame,
+                        [int(cv2.IMWRITE_JPEG_QUALITY), jpeg_quality],
+                    )
+                    return encoded.tobytes() if ok else None
+            except ImportError:
+                # Source-tree development may run under a Python without
+                # OpenCV even though the bundled runtime always includes it.
+                from io import BytesIO
+                from PIL import Image
+
+                def encode_jpeg(frame, jpeg_quality):
+                    output = BytesIO()
+                    Image.fromarray(frame[:, :, ::-1]).save(
+                        output, format="JPEG", quality=jpeg_quality
+                    )
+                    return output.getvalue()
+
+            preview = source.obs_preview_status()
+            interval = 1.0 / max(1.0, float(preview.get("fps") or 15.0))
+            quality = int(preview.get("quality") or 75)
+            self.send_response(200)
+            self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=frame")
+            self.send_header("Connection", "close")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.close_connection = True
+
+            sequence = -1
+            while True:
+                sequence, frame = source.wait_obs_preview_frame(sequence, timeout=1.0)
+                if frame is None:
+                    if not source.obs_preview_status().get("enabled"):
+                        break
+                    continue
+                started = time.monotonic()
+                jpeg = encode_jpeg(frame, quality)
+                if not jpeg:
+                    continue
+                self.wfile.write(b"--frame\r\n")
+                self.wfile.write(b"Content-Type: image/jpeg\r\n")
+                self.wfile.write(f"Content-Length: {len(jpeg)}\r\n\r\n".encode("ascii"))
+                self.wfile.write(jpeg)
+                self.wfile.write(b"\r\n")
+                self.wfile.flush()
+                remaining = interval - (time.monotonic() - started)
+                if remaining > 0.0:
+                    time.sleep(remaining)
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+            pass
+        except Exception as exc:
+            if os.environ.get("XRA_VERBOSE", "0").lower() in {"1", "true", "yes", "on"}:
+                print(f"[XRA] OBS preview stream stopped: {exc}", flush=True)
+        finally:
+            source.end_obs_preview()
+
+    def _backend_status(self):
+        """Lightweight status payload for the Performance tab."""
+        if not BACKENDS_OK:
+            return {"ok": False, "error": "backends module failed to import",
+                    "detail": _BACKENDS_IMPORT_ERROR}
+        try:
+            from xra_backends import capture as backend_capture
+            capture_status = backend_capture.CAPTURE.status()
+        except Exception:
+            capture_status = {"running": False}
+        try:
+            transport_status = backend_server.get_transport_status()
+        except Exception:
+            transport_status = {}
+        return {
+            "ok": True,
+            "active": backend_engine.ENGINE.status(),
+            "capture": capture_status,
+            "hardware": capture_status.get("hardware") or (backend_capture.probe_hardware_info() if hasattr(backend_capture, 'probe_hardware_info') else None),
+            "transport": transport_status,
+            "process": get_process_metrics(),
+            "provision": backend_provision.status(),
+            "installed": {mid: backend_registry.is_installed(mid)
+                          for mid in backend_registry.REGISTRY},
+        }
+
+    def read_json_body(self, max_bytes=4 * 1024 * 1024):
+        length = int(self.headers.get("Content-Length", "0"))
+        if length <= 0 or length > max_bytes:
+            raise ValueError("Invalid JSON size")
+        obj = json.loads(self.rfile.read(length).decode("utf-8"))
+        if not isinstance(obj, dict):
+            raise ValueError("JSON must be an object")
+        return obj
+
+    def do_POST(self):
+        parsed = urlparse(self.path)
+        path = parsed.path
+
+        if path == "/__xra_backend/download":
+            if not BACKENDS_OK:
+                self.send_json({"ok": False, "error": "backends module failed to import"}, status=500)
+                return
+            try:
+                obj = self.read_json_body(64 * 1024)
+                model = str(obj.get("model") or "")
+                if model not in backend_registry.REGISTRY:
+                    raise ValueError(f"Unknown backend: {model}")
+                result = backend_downloader.ensure_model(model)
+                self.send_json(result)
+            except Exception as exc:
+                self.send_json({"ok": False, "error": str(exc)}, status=400)
+            return
+
+        if path == "/__xra_backend/load":
+            if not BACKENDS_OK:
+                self.send_json({"ok": False, "error": "backends module failed to import"}, status=500)
+                return
+            try:
+                obj = self.read_json_body(64 * 1024)
+                model = str(obj.get("model") or "")
+                mode = obj.get("mode") or obj.get("mocap_mode")
+                if mode:
+                    from xra_backends import capture as backend_capture
+                    backend_engine.ENGINE.configure_mode(mode)
+                    backend_capture.CAPTURE.configure(mocap_mode=mode)
+                if model == backend_registry.MEDIAPIPE_ID or not model:
+                    backend_engine.ENGINE.unload()
+                    self.send_json({"ok": True, "active": backend_engine.ENGINE.status()})
+                    return
+                if model not in backend_registry.REGISTRY:
+                    raise ValueError(f"Unknown backend: {model}")
+                result = backend_engine.ENGINE.load(model)
+                self.send_json(result)
+            except Exception as exc:
+                self.send_json({"ok": False, "error": str(exc)}, status=400)
+            return
+
+        if path == "/__xra_backend/mode":
+            if not BACKENDS_OK:
+                self.send_json({"ok": False, "error": "backends module failed to import"}, status=500)
+                return
+            try:
+                obj = self.read_json_body(64 * 1024)
+                mode = str(obj.get("mode") or obj.get("mocap_mode") or "holistic")
+                from xra_backends import capture as backend_capture
+                res = backend_engine.ENGINE.configure_mode(mode)
+                backend_capture.CAPTURE.configure(mocap_mode=mode)
+                self.send_json({"ok": True, "active": backend_engine.ENGINE.status(), "capture": backend_capture.CAPTURE.status()})
+            except Exception as exc:
+                self.send_json({"ok": False, "error": str(exc)}, status=400)
+            return
+
+        if path == "/__xra_backend/uninstall":
+            if not BACKENDS_OK:
+                self.send_json({"ok": False, "error": "backends module failed to import"}, status=500)
+                return
+            try:
+                obj = self.read_json_body(64 * 1024)
+                model = str(obj.get("model") or "")
+                if model not in backend_registry.REGISTRY:
+                    raise ValueError(f"Unknown backend: {model}")
+                if backend_engine.ENGINE.model_id == model:
+                    backend_engine.ENGINE.unload()
+                result = backend_downloader.remove_model(model)
+                self.send_json(result)
+            except Exception as exc:
+                self.send_json({"ok": False, "error": str(exc)}, status=400)
+            return
+
+        if path == "/__xra_debug/save":
+            try:
+                obj = self.read_json_body(64 * 1024 * 1024)
+                content = obj.get("content")
+                if not isinstance(content, str) or not content:
+                    raise ValueError("Missing debug log content")
+                saved = save_debug_log_native(obj.get("suggested_name"), content)
+                self.send_json({"ok": True, "path": str(saved) if saved else "", "cancelled": saved is None})
+            except Exception as exc:
+                self.send_json({"ok": False, "error": str(exc)}, status=400)
+            return
+
+        if path == "/__xra_prop":
+            try:
+                params = {}
+                for pair in parsed.query.split("&"):
+                    if "=" in pair:
+                        k, v = pair.split("=", 1)
+                        params[k] = unquote(v)
+                filename = params.get("filename") or self.headers.get("X-Filename") or ""
+                length = int(self.headers.get("Content-Length", "0"))
+                stored = save_prop_upload(filename, self.rfile, length)
+                self.send_json({"ok": True, "filename": stored})
+            except Exception as exc:
+                self.send_json({"ok": False, "error": str(exc)}, status=400)
+            return
+
+        if path == "/__xra_stage":
+            try:
+                params = {}
+                for pair in parsed.query.split("&"):
+                    if "=" in pair:
+                        k, v = pair.split("=", 1)
+                        params[k] = unquote(v)
+                filename = params.get("filename") or self.headers.get("X-Filename") or ""
+                length = int(self.headers.get("Content-Length", "0"))
+                stored = save_stage_upload(filename, self.rfile, length)
+                self.send_json({"ok": True, "filename": stored})
+            except Exception as exc:
+                self.send_json({"ok": False, "error": str(exc)}, status=400)
+            return
+
+        if path == "/__xra_avatar":
+            try:
+                params = {}
+                for pair in parsed.query.split("&"):
+                    if "=" in pair:
+                        k, v = pair.split("=", 1)
+                        params[k] = unquote(v)
+                filename = params.get("filename") or self.headers.get("X-Filename") or ""
+                length = int(self.headers.get("Content-Length", "0"))
+                stored = save_avatar_upload(filename, self.rfile, length)
+                self.send_json({"ok": True, "filename": stored})
+            except Exception as exc:
+                self.send_json({"ok": False, "error": str(exc)}, status=400)
+            return
+
+        if path == "/__xra_recording/start":
+            try:
+                obj = self.read_json_body(128 * 1024)
+                session = uuid.uuid4().hex
+                folder = resolve_output_dir(obj.get("output_dir"))
+                base = safe_recording_name(obj.get("filename"))
+                mime = str(obj.get("mime_type") or "video/webm")
+                fmt = str(obj.get("output_format") or "webm").lower()
+                mode = str(obj.get("mode") or "video_audio")
+                src_ext = source_extension_for_mime(mime, obj.get("source_format") or "webm")
+                final_ext = final_extension(fmt, mode)
+                temporary = bool(obj.get("temporary"))
+                force_source_temp = bool(obj.get("force_source_temp")) or temporary
+                if temporary:
+                    final_path = folder / f".{base}_{session}.temp{final_ext}"
+                else:
+                    final_path = unique_path(folder, base, final_ext)
+                if (not force_source_temp) and src_ext == final_ext and fmt in {"webm", "mp4"}:
+                    source_path = final_path
+                else:
+                    source_path = folder / f".{base}_{session}.source{src_ext}"
+                source_path.touch()
+                info = {
+                    "path": source_path, "final_path": final_path, "bytes": 0, "started": time.time(),
+                    "output_format": fmt, "mode": mode, "temporary": temporary,
+                    "video_bps": int(obj.get("video_bps") or 0), "audio_bps": int(obj.get("audio_bps") or 0),
+                    "hardware_encode": str(obj.get("hardware_encode") or "auto"),
+                }
+                with RECORDING_LOCK:
+                    RECORDING_SESSIONS[session] = info
+                write_recording_manifest(session, info)
+                self.send_json({"ok": True, "session": session, "path": str(final_path), "writing_path": str(source_path), "resolved_output_dir": str(folder), "output_format": fmt, "ffmpeg_path": find_ffmpeg() or "", "api_version": XRA_RECORDER_API_VERSION})
+            except Exception as exc:
+                self.send_json({"ok": False, "error": str(exc)}, status=400)
+            return
+
+        if path == "/__xra_recording/choose-folder":
+            try:
+                obj = self.read_json_body(64 * 1024)
+                picked = choose_folder_native(obj.get("initial") or "")
+                self.send_json({"ok": True, "path": picked})
+            except Exception as exc:
+                self.send_json({"ok": False, "error": str(exc)}, status=400)
+            return
+
+        if path == "/__xra_recording/chunk":
+            try:
+                params = {}
+                for pair in parsed.query.split("&"):
+                    if "=" in pair:
+                        k, v = pair.split("=", 1)
+                        params[k] = v
+                session = params.get("session", "")
+                length = int(self.headers.get("Content-Length", "0"))
+                if not session or length <= 0 or length > 64 * 1024 * 1024:
+                    raise ValueError("Invalid recording chunk")
+                with RECORDING_LOCK:
+                    info = RECORDING_SESSIONS.get(session)
+                if not info:
+                    raise ValueError("Unknown recording session")
+                remaining = length
+                with info["path"].open("ab") as handle:
+                    while remaining:
+                        data = self.rfile.read(min(1024 * 1024, remaining))
+                        if not data:
+                            raise IOError("Unexpected end of recording chunk")
+                        handle.write(data)
+                        remaining -= len(data)
+                with RECORDING_LOCK:
+                    info["bytes"] += length
+                    total = info["bytes"]
+                write_recording_manifest(session, info)
+                try: free = shutil.disk_usage(info["path"].parent).free
+                except Exception: free = None
+                self.send_json({"ok": True, "bytes": total, "free_bytes": free})
+            except Exception as exc:
+                self.send_json({"ok": False, "error": str(exc)}, status=400)
+            return
+
+        if path == "/__xra_recording/finalize-native":
+            video_session = ""; audio_session = ""; video_info = None; audio_info = None
+            try:
+                obj = self.read_json_body(128 * 1024)
+                video_session = str(obj.get("video_session") or "")
+                audio_session = str(obj.get("audio_session") or "")
+                if not video_session:
+                    raise ValueError("Missing native video session")
+                with RECORDING_LOCK:
+                    video_info = RECORDING_SESSIONS.pop(video_session, None)
+                    audio_info = RECORDING_SESSIONS.pop(audio_session, None) if audio_session else None
+                if not video_info:
+                    raise ValueError("Unknown native video session")
+                final_path = finalize_native_recording(video_info, audio_info)
+                delete_recording_manifest(video_session)
+                if audio_session: delete_recording_manifest(audio_session)
+                self.send_json({
+                    "ok": True, "path": str(final_path),
+                    "bytes": final_path.stat().st_size if final_path.exists() else int(video_info.get("bytes") or 0),
+                    "format": video_info.get("output_format", "webm"),
+                    "source_path": str(video_info.get("path", "")),
+                    "audio_source_path": str(audio_info.get("path", "")) if audio_info else "",
+                    "api_version": XRA_RECORDER_API_VERSION
+                })
+            except Exception as exc:
+                # Put sessions back so the source files/manifests stay recoverable instead
+                # of disappearing after a mux/conversion failure.
+                with RECORDING_LOCK:
+                    if video_session and video_info: RECORDING_SESSIONS[video_session] = video_info
+                    if audio_session and audio_info: RECORDING_SESSIONS[audio_session] = audio_info
+                if video_info and video_session: write_recording_manifest(video_session, video_info, error=str(exc))
+                if audio_info and audio_session: write_recording_manifest(audio_session, audio_info, error=str(exc))
+                self.send_json({
+                    "ok": False, "error": str(exc),
+                    "source_path": str(video_info.get("path", "")) if video_info else "",
+                    "audio_source_path": str(audio_info.get("path", "")) if audio_info else "",
+                    "recoverable": bool(video_info), "api_version": XRA_RECORDER_API_VERSION
+                }, status=400)
+            return
+
+        if path == "/__xra_recording/finish":
+            session = ""; info = None
+            try:
+                obj = self.read_json_body(128 * 1024); session = str(obj.get("session") or "")
+                with RECORDING_LOCK: info = RECORDING_SESSIONS.pop(session, None)
+                if not info:
+                    mp = _manifest_path(session)
+                    if mp.exists():
+                        raw = json.loads(mp.read_text(encoding="utf-8")); info = dict(raw)
+                        info["path"] = Path(raw["path"]); info["final_path"] = Path(raw["final_path"])
+                if not info: raise ValueError("Unknown recording session")
+                final_path = convert_recording(info); delete_recording_manifest(session)
+                self.send_json({"ok": True, "path": str(final_path), "bytes": final_path.stat().st_size if final_path.exists() else info["bytes"], "seconds": max(0.0, time.time() - info["started"]), "format": info.get("output_format", "webm"), "source_path": str(info.get("path", "")), "ffmpeg_path": find_ffmpeg() or "", "api_version": XRA_RECORDER_API_VERSION})
+            except Exception as exc:
+                if info and session: write_recording_manifest(session, info, error=str(exc))
+                source_path = str(info.get("path")) if info else ""
+                self.send_json({"ok": False, "error": str(exc), "source_path": source_path, "recoverable": bool(source_path)}, status=400)
+            return
+
+        if path == "/__xra_recording/recover":
+            try:
+                obj = self.read_json_body(64 * 1024); session = str(obj.get("session") or ""); mp = _manifest_path(session)
+                if not session or not mp.exists(): raise ValueError("Recovery session not found")
+                raw = json.loads(mp.read_text(encoding="utf-8")); info = dict(raw)
+                info["path"] = Path(raw["path"]); info["final_path"] = Path(raw["final_path"])
+                final_path = convert_recording(info); delete_recording_manifest(session)
+                self.send_json({"ok": True, "path": str(final_path), "bytes": final_path.stat().st_size})
+            except Exception as exc:
+                self.send_json({"ok": False, "error": str(exc)}, status=400)
+            return
+
+        if path == "/__xra_recording/sync-marker":
+            try:
+                obj = self.read_json_body(128 * 1024)
+                rec_path_str = obj.get("recording_path") or ""
+                folder_str = obj.get("output_dir") or ""
+                content = str(obj.get("content") or "")
+                base_name = str(obj.get("base_name") or "")
+                folder = None
+
+                if rec_path_str:
+                    rp = Path(rec_path_str)
+                    if rp.parent and str(rp.parent) not in (".", "/"):
+                        folder = rp.parent
+                    if not base_name:
+                        base_name = rp.stem.lstrip(".")
+                if not folder and folder_str:
+                    folder = resolve_output_dir(folder_str)
+                if not folder:
+                    with RECORDING_LOCK:
+                        for s_info in RECORDING_SESSIONS.values():
+                            p = s_info.get("final_path") or s_info.get("path")
+                            if p:
+                                folder = Path(p).parent
+                                if not base_name:
+                                    base_name = Path(p).stem.lstrip(".")
+                                break
+                if not folder:
+                    folder = RECORDINGS_DIR.resolve()
+                folder.mkdir(parents=True, exist_ok=True)
+
+                marker_filename = f"{base_name}_sync_markers.txt" if base_name else "sync_markers.txt"
+                marker_file = folder / marker_filename
+                with marker_file.open("a", encoding="utf-8") as f:
+                    f.write(content)
+
+                self.send_json({
+                    "ok": True,
+                    "path": str(marker_file.resolve()),
+                    "filename": marker_filename,
+                    "folder": str(folder.resolve())
+                })
+            except Exception as exc:
+                self.send_json({"ok": False, "error": str(exc)}, status=400)
+            return
+
+        if path not in ("/__xra_profile", "/__xra_config"):
+            self.send_error(404)
+            return
+
+        try:
+            obj = self.read_json_body()
+            if path == "/__xra_config":
+                profile = load_profile()
+                profile["custom"] = obj
+            else:
+                profile = obj
+                if "custom" not in profile:
+                    raise ValueError("Profile must contain 'custom'")
+
+            save_profile(profile)
+            self.send_json({"ok": True})
+        except Exception as exc:
+            self.send_json({"ok": False, "error": str(exc)}, status=400)
+
+
+if __name__ == "__main__":
+    import socket
+    port = 8000
+    server = None
+    try:
+        server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+    except OSError:
+        for p in range(8001, 8050):
+            try:
+                server = ThreadingHTTPServer(("127.0.0.1", p), Handler)
+                port = p
+                break
+            except OSError:
+                continue
+        if not server:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.bind(("127.0.0.1", 0))
+                port = s.getsockname()[1]
+            server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+
+    server.daemon_threads = True
+    print("XR Animator · XRA server")
+    print(f"http://127.0.0.1:{port}/XR_Animator.html")
+    print(f"Profile: {PROFILE_FILE}")
+    print(f"Backup:  {BACKUP_FILE}")
+    print(f"Avatars: {AVATAR_DIR}")
+
+    # Backend provisioning already started at import time (see
+    # _start_backend_provisioning); nothing else to do here.
+    if not BACKENDS_OK:
+        print("[XRA] Native mocap backend unavailable (import failed)")
+
+    server.serve_forever()

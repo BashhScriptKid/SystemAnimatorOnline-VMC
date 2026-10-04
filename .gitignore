@@ -1,4 +1,4 @@
-﻿
+
 _private/
 TEMP/_config_local/
 node_modules/OSC.js/
@@ -6,3 +6,51 @@ node_modules/OSC-js/
 node_modules/nut.js/
 au3/*.exe
 au3/*/*.exe
+
+# XR Animator local state and generated recording data
+xra_profile.json
+xra_profile.backup.json
+xra_profile.json.tmp
+recordings/
+tracking_logs/
+avatars/
+.xra_recording_sessions/
+__pycache__/
+*.py[cod]
+
+# Local build environments and generated desktop bundles
+/.venv*/
+/build/
+/cache/
+/dist/
+/dist_nwjs/
+/release/
+/.build/
+/locales/
+/node_modules/*
+/icudtl.dat
+/v8_context_snapshot.bin
+/nw_bin
+/webview_app.py
+/webview_app.spec
+/root_test*.log
+/package-lock.json
+
+# XR Animator ONNX mocap backends: keep the package code, ignore heavy payloads.
+# The runtime is bootstrapped from vendored wheels, models are downloaded on
+# demand and must never be committed (git-lfs territory).
+/xra_backends/models/
+/xra_backends/runtime/
+/xra_backends/runtime_state.json
+/xra_backends/provision_state.json
+# Vendored wheels are added deliberately by the maintainer; keep them tracked
+# only when intentionally committed. Ignore stray partially-downloaded wheels.
+/xra_backends/wheels/*.part
+
+# The stage picker stores user imports here. Only the generated built-in stage
+# is a repository asset required by the release build.
+/stages/*
+!/stages/default_stage.glb
+
+# Scratch / test artifacts
+/tmp/

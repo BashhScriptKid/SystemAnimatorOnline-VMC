@@ -1,0 +1,2262 @@
+(() => {
+  'use strict';
+
+  const XRA = window.XRA;
+  const TAG = '[XRA NATIVE BRIDGE]';
+  const { config, events, util } = XRA;
+
+  // Serialize every camera mutation. XR Animator's native streamer is not
+  // re-entrant: overlapping restart/applyConstraints/device-switch calls are
+  // a common cause of black/vanishing previews.
+  let cameraChain = Promise.resolve();
+  let cameraBusy = '';
+  let cameraSoftStopped = false;
+  function cameraDebugState() {
+    const active = activeCamera();
+    const health = previewHealth();
+    return {
+      initialized:!!window.System?._browser?.camera?.initialized,
+      ready_state:active.readyState || '',
+      label:active.label || '',
+      healthy:!!health.healthy,
+      live:!!health.live,
+      muted:!!health.muted
+    };
+  }
+
+  function runCameraOp(label, fn) {
+    const task = cameraChain.catch(() => {}).then(async () => {
+      const started = performance.now();
+      cameraBusy = label;
+      events.emit('camera-operation', { busy: true, label });
+      XRA.debug?.record('camera.operation.started', { label, state:cameraDebugState() });
+      try {
+        const result = await fn();
+        XRA.debug?.record('camera.operation.succeeded', {
+          label,
+          elapsed_ms:Math.round((performance.now() - started) * 10) / 10,
+          state:cameraDebugState()
+        });
+        return result;
+      }
+      catch (error) {
+        XRA.debug?.record('camera.operation.failed', {
+          label,
+          elapsed_ms:Math.round((performance.now() - started) * 10) / 10,
+          error,
+          state:cameraDebugState()
+        });
+        throw error;
+      }
+      finally {
+        cameraBusy = '';
+        events.emit('camera-operation', { busy: false, label });
+      }
+    });
+    cameraChain = task.catch(() => {});
+    return task;
+  }
+
+  function itemBase() {
+    return window.MMD_SA_options?.Dungeon_options?.item_base || null;
+  }
+
+  function item(name) {
+    return itemBase()?.[name] || null;
+  }
+
+  async function invokeItem(name) {
+    await XRA.whenNativeReady();
+    const target = item(name);
+    const fn = target?.action?.func;
+    if (typeof fn !== 'function') throw new Error(`Native command not ready: ${name}`);
+
+    try {
+      // Native inventory actions sometimes expect the item itself as argument.
+      return await fn.call(target.action, target);
+    }
+    catch (e) {
+      console.error(TAG, 'native command failed', name, e);
+      throw e;
+    }
+  }
+
+  function nodeLabel(node) {
+    if (!node) return '';
+    return [node.textContent, node.value, node.title, node.getAttribute?.('aria-label'), node.getAttribute?.('alt'), node.id, node.className]
+      .filter(Boolean).join(' ').replace(/\s+/g, ' ').trim();
+  }
+
+  function nativeClickable(rx) {
+    const nodes = document.querySelectorAll('button, a, input[type="button"], input[type="submit"], input[type="image"], [role="button"]');
+    for (const node of nodes) {
+      if (node.closest?.('#XRA_CUSTOM_PANEL, #XRA_NATIVE_SETTINGS, .xra-overlay, .xra-recording-hud')) continue;
+      if (rx.test(nodeLabel(node))) return node;
+    }
+    return null;
+  }
+
+  // V7.6.24: VRM loading must go through XR Animator's drag/drop pipeline.
+  // Merely clicking its generic <input type=file> opens a picker but does not
+  // perform the "OK -> SA_DragDropEMU(file)" step, which is why V7.6.23 let
+  // the user select a model while the old avatar remained active.
+  let xraVrmInput = null;
+  let vrmLoadBusy = false;
+  let vrmLoadTail = Promise.resolve();
+  let vrmRestoreInFlight = null;
+  let initialVrmRestored = false;
+
+  function modelList() {
+    const list = window.MMD_SA?.THREEX?.models;
+    return Array.isArray(list) ? list : [];
+  }
+
+  function resolvedAvatarModel(model) {
+    if (!model) return null;
+    if (model.type !== 'MMD_dummy') return model;
+    try { return model.model || null; }
+    catch (_) { return null; }
+  }
+
+  function avatarScene(model) {
+    const resolved = resolvedAvatarModel(model);
+    return resolved?.model?.scene || resolved?.mesh || resolved?.scene || null;
+  }
+
+  function extraModelPaths() {
+    const list = window.MMD_SA_options?.THREEX_options?.model_path_extra;
+    return Array.isArray(list) ? list.slice() : [];
+  }
+
+  function basename(value) {
+    return String(value || '').replace(/[?#].*$/, '').split(/[\\/]/).pop().toLowerCase();
+  }
+
+  function modelSearchText(model) {
+    if (!model || typeof model !== 'object') return '';
+    // model_path is an inherited getter on XR Animator's Model_obj, so it is
+    // absent from Object.entries(). Include the native VRM fields explicitly.
+    const out = [
+      model.model_path,
+      model.para?.url,
+      model.model?.scene?.name,
+      model.model?.meta?.name,
+      model.model?.meta?.title
+    ].filter(value => typeof value === 'string');
+    for (const [key, value] of Object.entries(model)) {
+      if (!/(name|file|path|url|src)/i.test(key)) continue;
+      if (typeof value === 'string' || typeof value === 'number') out.push(String(value));
+      else if (value && typeof value === 'object') {
+        for (const subKey of ['name','fileName','filename','path','url','src']) {
+          const v = value[subKey];
+          if (typeof v === 'string') out.push(v);
+        }
+      }
+    }
+    return out.join(' ').toLowerCase();
+  }
+
+  function findModelByFilename(filename) {
+    const wanted = basename(filename);
+    const stem = wanted.replace(/\.(vrm|glb|gltf)$/i, '');
+    if (!wanted) return -1;
+    const models = modelList();
+    for (let i = models.length - 1; i >= 0; i--) {
+      const text = modelSearchText(models[i]);
+      if (text.includes(wanted) || (stem.length >= 3 && text.includes(stem))) return i;
+    }
+    return -1;
+  }
+
+  function findLoadedModelIndex(file, beforeModels, beforePaths) {
+    const models = modelList();
+    if (!models.length) return -1;
+
+    // Best signal: a brand-new model object appeared in the VRM model list.
+    for (let i = models.length - 1; i >= 0; i--) {
+      if (!beforeModels.includes(models[i])) return i;
+    }
+
+    // XR Animator stores extra avatars in model_path_extra. Map a newly filled
+    // slot back to the model's index_default, matching its own hot-swap logic.
+    const paths = extraModelPaths();
+    for (let slot = paths.length - 1; slot >= 0; slot--) {
+      if (!paths[slot] || paths[slot] === beforePaths[slot]) continue;
+      const wantedDefault = slot + 1;
+      const idx = models.findIndex(m => Number(m?.index_default) === wantedDefault);
+      if (idx >= 0) return idx;
+    }
+
+    // Re-selecting a model that XR Animator already has loaded may not append a
+    // new object. In that case use the filename/path metadata if available.
+    const wanted = basename(file?.name || file?.path);
+    if (wanted) {
+      for (let i = models.length - 1; i >= 0; i--) {
+        const text = modelSearchText(models[i]);
+        if (text.includes(wanted)) return i;
+        const stem = wanted.replace(/\.(vrm|glb|gltf)$/i, '');
+        if (stem.length >= 3 && text.includes(stem)) return i;
+      }
+    }
+    return -1;
+  }
+
+  async function swapToModel(index) {
+    const vrm = window.MMD_SA?.THREEX?.VRM;
+    const fn = vrm?.swap_model;
+    if (typeof fn !== 'function' || index < 0) return false;
+    const threeX = window.MMD_SA?.THREEX;
+    const targetModel = threeX?.models?.[index];
+    const targetScene = targetModel?.model?.scene;
+    const result = fn.call(vrm, index);
+    if (result && typeof result.then === 'function') await result;
+
+    // Wait until on_animation_update has executed and targetModel has become model 0 in scene,
+    // plus 2 animation/render frames so the mesh is physically visible on canvas.
+    const deadline = performance.now() + 6000;
+    while (performance.now() < deadline) {
+      const current0 = threeX?.models?.[0];
+      if (current0 === targetModel || (targetScene && current0?.model?.scene === targetScene)) {
+        await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(r, 120))));
+        return true;
+      }
+      await sleep(60);
+    }
+    return false;
+  }
+
+  function dragDropLoader() {
+    if (typeof window.SA_DragDropEMU === 'function') return window.SA_DragDropEMU.bind(window);
+    try {
+      if (window.parent && typeof window.parent.SA_DragDropEMU === 'function') return window.parent.SA_DragDropEMU.bind(window.parent);
+    } catch (e) {}
+    return null;
+  }
+
+  const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+  function clearCachedVrmObjectUrl(filename) {
+    const key = String(filename || '').replace(/^.+[\\/]/, '');
+    const dd = window.SA_topmost_window?.DragDrop || window.DragDrop;
+    if (!key || !dd?._obj_url) return;
+    const previous = dd._obj_url[key];
+    if (typeof previous === 'string' && previous.startsWith('blob:')) {
+      try { (window.SA_topmost_window?.URL || window.URL).revokeObjectURL(previous); } catch (_) {}
+    }
+    delete dd._obj_url[key];
+    // SA_DragDropEMU will immediately repopulate _path_to_obj with the current
+    // File. Removing the previous entry prevents a same-named VRM from reusing
+    // a Blob URL that belongs to an older/failed load.
+    if (dd._path_to_obj) delete dd._path_to_obj[key];
+  }
+
+  async function uploadAvatarCopy(file) {
+    const filename = file?.name || basename(file?.path) || 'avatar.vrm';
+    const response = await fetch(`/__xra_avatar?filename=${encodeURIComponent(filename)}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': file.type || 'application/octet-stream',
+        'X-Filename': filename
+      },
+      body: file
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || !data.ok || !data.filename) {
+      throw new Error(data.error || `Impossibile copiare “${filename}” nella libreria avatar`);
+    }
+    return String(data.filename);
+  }
+
+  async function persistAvatar(file) {
+    try {
+      const stored = await uploadAvatarCopy(file);
+      config.avatar ||= {};
+      config.avatar.filename = stored;
+      const saved = await XRA.profileService.save(0);
+      if (!saved) XRA.toast('Avatar copiato, ma il profilo non è stato salvato', 'error', 6000);
+      return saved;
+    }
+    catch (error) {
+      console.error(TAG, 'avatar library save failed', error);
+      XRA.toast('Avatar attivo, ma non è stato salvato in avatars/: ' + (error.message || error), 'error', 6000);
+      return false;
+    }
+  }
+
+
+
+  async function performVrmLoad(file, { persist = true, quiet = false } = {}) {
+    if (!file) return false;
+    const loader = dragDropLoader();
+    if (!loader) throw new Error('XR Animator drag/drop loader is not ready');
+
+    vrmLoadBusy = true;
+    const beforeModels = modelList().slice();
+    const beforePaths = extraModelPaths();
+    const beforeActive = beforeModels[0] || null;
+    const beforeActiveScene = avatarScene(beforeActive);
+    const filename = file.name || basename(file.path) || 'VRM';
+    if (!quiet) XRA.toast(`Caricamento avatar: ${filename}…`, 'info', 2500);
+    events.emit('avatar-loading', { name: filename });
+
+    try {
+      // This mirrors XR Animator's own file-dialog confirmation path.
+      clearCachedVrmObjectUrl(filename);
+      let result = loader(file);
+      if (result && typeof result.then === 'function') await result;
+
+      // DragDrop.onDrop_finish now awaits the native GLTF parse and its queued
+      // swap. Keep a small compatibility window for an older/cached core, but
+      // do not impose a 20-second deadline on parsing a large VRM.
+      let candidate = findLoadedModelIndex(file, beforeModels, beforePaths);
+      const deadline = performance.now() + 5000;
+      while (performance.now() < deadline) {
+        if (candidate < 0) candidate = findLoadedModelIndex(file, beforeModels, beforePaths);
+        if (candidate >= 0) {
+          try {
+            if (await swapToModel(candidate)) {
+              if (persist) await persistAvatar(file);
+              if (!quiet) XRA.toast(`Avatar attivo: ${filename}`);
+              events.emit('avatar-changed', { name: filename, modelIndex: candidate });
+              events.emit('avatar-ready', { name: filename, modelIndex: candidate });
+              return true;
+            }
+          } catch (swapError) {
+            // The model object can appear a little before its scene is fully
+            // ready. Keep polling instead of failing the whole load immediately.
+          }
+        }
+        await sleep(150);
+      }
+
+      // Some builds replace the active/default model in-place rather than add
+      // an extra model. Accept only a real change to model 0; merely appending
+      // an unswapped model must never produce a false "avatar loaded" result.
+      const afterModels = modelList();
+      const afterActive = afterModels[0] || null;
+      const afterActiveScene = avatarScene(afterActive);
+      const activeChanged = !!afterActive && (
+        afterActive !== beforeActive ||
+        (!!afterActiveScene && afterActiveScene !== beforeActiveScene)
+      );
+      if (activeChanged) {
+        if (persist) await persistAvatar(file);
+        if (!quiet) XRA.toast(`Avatar caricato: ${filename}`);
+        events.emit('avatar-changed', { name: filename, modelIndex: -1 });
+        events.emit('avatar-ready', { name: filename, modelIndex: -1 });
+        return true;
+      }
+
+      throw new Error(`XR Animator ha terminato il caricamento di “${filename}”, ma il modello attivo non corrisponde al file selezionato`);
+    }
+    finally {
+      vrmLoadBusy = false;
+      initialVrmRestored = true;
+      events.emit('avatar-ready', { name: filename });
+    }
+  }
+
+  function loadVrmFile(file, options = {}) {
+    // The native loader is global and cannot safely parse/swap two models at
+    // once. Queue restore, picker and retry requests instead of throwing the
+    // old “A VRM is already being loaded” error and leaving a half-built mesh.
+    const task = vrmLoadTail.catch(() => {}).then(() => performVrmLoad(file, options));
+    vrmLoadTail = task.catch(() => {});
+    return task;
+  }
+
+  function savedAvatarFilename() {
+    return String(config.avatar?.filename || '').trim();
+  }
+
+  function isAvatarReady() {
+    if (!window.MMD_SA?.MMD_started) return false;
+    if (vrmLoadBusy || vrmRestoreInFlight) return false;
+    const filename = savedAvatarFilename();
+    if (filename && !initialVrmRestored) return false;
+    const facade = window.MMD_SA?.THREEX?.get_model?.(0);
+    const model = resolvedAvatarModel(facade);
+    if (!model) return false;
+    if (facade?.loading || model.loading || window.MMD_SA?.THREEX?._loading_model) return false;
+    const scene = avatarScene(model);
+    if (!scene) return false;
+    if (scene.visible === false) return false;
+    return true;
+  }
+
+  async function restoreSavedVrm() {
+    if (vrmRestoreInFlight) return vrmRestoreInFlight;
+    const filename = savedAvatarFilename();
+    if (!filename) {
+      initialVrmRestored = true;
+      return false;
+    }
+
+    events.emit('avatar-loading', { name: filename });
+    vrmRestoreInFlight = (async () => {
+      await XRA.whenNativeReady();
+      if (vrmLoadBusy) return false;
+
+      const existing = findModelByFilename(filename);
+      if (existing >= 0 && await swapToModel(existing)) return true;
+
+      const response = await fetch(`/__xra_avatar/${encodeURIComponent(filename)}`, { cache:'no-store' });
+      if (!response.ok) {
+        const error = new Error(`Avatar non trovato in avatars/: ${filename}. Caricalo di nuovo una volta: verrà copiato nella cartella dell’app e riusato agli avvii successivi.`);
+        error.xraAvatarMissing = response.status === 404;
+        throw error;
+      }
+      const blob = await response.blob();
+      const file = new File([blob], filename, { type:blob.type || 'model/gltf-binary' });
+      return loadVrmFile(file, { persist:false, quiet:true });
+    })().catch(async error => {
+      console.error(TAG, 'saved VRM restore failed', error);
+      // Clear the preference only for a confirmed missing file. Parse/GPU
+      // failures are transient and must not silently forget the user's avatar.
+      if (error?.xraAvatarMissing && savedAvatarFilename() === filename) {
+        config.avatar ||= {};
+        config.avatar.filename = '';
+        try { await XRA.profileService.save(0); } catch (_) {}
+      }
+      const tr = source => XRA.i18n?.t?.(source) || source;
+      events.emit('avatar-fallback', { missing: filename, fallback: 'default', error });
+      XRA.toast(error?.xraAvatarMissing
+        ? `${tr('Avatar')} “${filename}” ${tr('unavailable: restored default model.')}`
+        : `${tr('Failed to load')} “${filename}”; ${tr('selection was kept for next startup.')}`, 'error', 6000);
+      return false;
+    }).finally(() => {
+      vrmRestoreInFlight = null;
+      initialVrmRestored = true;
+      events.emit('avatar-ready', { name: filename });
+    });
+
+    return vrmRestoreInFlight;
+  }
+
+  function ensureVrmInput() {
+    if (xraVrmInput?.isConnected) return xraVrmInput;
+    let input = document.getElementById('XRA_VRM_FILE_INPUT');
+    if (!(input instanceof HTMLInputElement)) {
+      input = document.createElement('input');
+      input.id = 'XRA_VRM_FILE_INPUT';
+      input.type = 'file';
+      input.accept = '.vrm,.glb,.gltf,model/gltf-binary,model/gltf+json';
+      input.style.cssText = 'position:fixed;left:-10000px;top:-10000px;width:1px;height:1px;opacity:0;pointer-events:none;';
+      input.tabIndex = -1;
+      document.body.appendChild(input);
+    }
+    input.onchange = async () => {
+      const file = input.files?.[0] || null;
+      try { if (file) await loadVrmFile(file); }
+      catch (e) {
+        console.error(TAG, 'VRM load failed', e);
+        XRA.toast('VRM loader: ' + e.message, 'error', 6000);
+      }
+      finally { input.value = ''; }
+    };
+    xraVrmInput = input;
+    return input;
+  }
+
+  async function openVrmPicker() {
+    // Keep the file dialog on the original user click. The actual selected File
+    // is then passed into SA_DragDropEMU by the onchange handler above.
+    const input = ensureVrmInput();
+    input.value = '';
+    input.click();
+    return true;
+  }
+
+  // The stock avatar medallion has a stable upstream id. The native quick menu
+  // is the compact Restart/About/Folder/File strip. Hide those exact elements
+  // rather than guessing based on dimensions/labels.
+  function markAvatarBadge() {
+    const node = document.getElementById('Cdungeon_status_bar');
+    if (!node) return false;
+    node.classList.add('xra-retired-avatar-badge');
+    return true;
+  }
+
+  function markNativeTopBar() {
+    const exact = [
+      document.getElementById('Lquick_menu'),
+      document.getElementById('Ldungeon_inventory'),
+      document.getElementById('Ldungeon_inventory_backpack')
+    ].filter(Boolean);
+    exact.forEach(node => node.classList.add('xra-retired-native-topbar'));
+
+    // Fallback for XR builds that render the model/restart/about strip in a
+    // wrapper with no stable id. Find the smallest native container whose own
+    // text/title contains the three concepts, and never touch our panels.
+    let semantic = false;
+    const nodes = document.querySelectorAll('div,nav,section,header,aside');
+    for (const node of nodes) {
+      if (node.closest?.('#XRA_CUSTOM_PANEL, #XRA_NATIVE_SETTINGS, .xra-overlay, .xra-recording-hud')) continue;
+      const r = node.getBoundingClientRect?.();
+      if (!r || r.width < 100 || r.height < 18 || r.height > 160 || r.top > 220) continue;
+      const text = nodeLabel(node);
+      const hasModel = /VRM\s*\/\s*MMD|\bVRM\b.*\bModel\b|\bMMD\b.*\bModel\b/i.test(text);
+      const hasRestart = /restart|reload/i.test(text);
+      const hasAbout = /about|info/i.test(text);
+      if (hasModel && (hasRestart || hasAbout)) {
+        node.classList.add('xra-retired-native-topbar');
+        semantic = true;
+        break;
+      }
+    }
+    return exact.length > 0 || semantic;
+  }
+
+  function hideNativeShellChrome() {
+    const top = markNativeTopBar();
+    const badge = markAvatarBadge();
+    return { top, badge };
+  }
+
+  // Keep XR Animator's native speech-bubble state machine alive (timers,
+  // calibration progress and keyboard branches), but replace its 3D cloud art
+  // with the same lightweight DOM language used by our side panels.
+  function hideSpeechBubbleMesh(bubble) {
+    if (!bubble) return;
+    try {
+      const mesh = window.MMD_SA?.THREEX?.mesh_obj
+        ?.get?.('SpeechBubbleMESH' + (bubble.index || ''));
+      if (typeof mesh?.hide === 'function') mesh.hide();
+      else if (bubble._mesh) bubble._mesh.visible = false;
+    }
+    catch (e) {
+      try { if (bubble._mesh) bubble._mesh.visible = false; } catch (ignore) {}
+    }
+  }
+
+  function speechBubbleInteractive(bubble) {
+    if (bubble?._branch_key_ != null) return true;
+    return (bubble?.msg_obj || []).some(line => line?.branch_key != null || line?.b_list?.length);
+  }
+
+  function dispatchNativeKey(key) {
+    key = String(key || '').trim().toUpperCase();
+    if (!key) return false;
+    const isDigit = /^\d$/.test(key);
+    const code = isDigit ? `Digit${key}` : `Key${key}`;
+    const keyCode = isDigit ? 48 + Number(key) : key.charCodeAt(0);
+    try {
+      const event = new KeyboardEvent('keydown', {
+        key, code, bubbles: true, cancelable: true
+      });
+      // The legacy dungeon handler checks both modern `code` and the old
+      // numeric fields depending on the selected branch type.
+      for (const name of ['keyCode', 'which']) {
+        if (!event[name]) Object.defineProperty(event, name, { value: keyCode });
+      }
+      document.dispatchEvent(event);
+      return true;
+    }
+    catch (e) {
+      console.warn(TAG, 'dialogue choice dispatch failed', key, e);
+      return false;
+    }
+  }
+
+  function speechBubbleContent(bubble) {
+    const raw = String(bubble?.msg || '').trim();
+    const branchPattern = /^([\dA-Z])\.\s*(.*)$/;
+    const body = [];
+    const actions = [];
+
+    for (const line of raw.split(/\r?\n/)) {
+      const match = branchPattern.exec(line.trim());
+      if (!match) {
+        body.push(line);
+        continue;
+      }
+      const key = String(match[1] || '').toUpperCase();
+      const label = String(match[2] || line).trim();
+      actions.push({
+        key,
+        label: `${key} · ${label}`,
+        onClick: () => dispatchNativeKey(key)
+      });
+    }
+
+    return {
+      message: body.join('\n').trim(),
+      actions
+    };
+  }
+
+  let calibrationNoticeSuppressedUntil = 0;
+
+  function beginCalibrationNotices() {
+    calibrationNoticeSuppressedUntil = 0;
+  }
+
+  function isCalibrationNotice(message) {
+    return /(calibrat|mocap\s+initializ|face\s+data|press\s+x\s+to\s+abort)/i.test(String(message || ''));
+  }
+
+  function dismissCalibrationNotices() {
+    // The native calibration uses bubbles 0 and 1. At 100% its final message
+    // can be queued after the completion event, so suppress only calibration
+    // text for a short grace period instead of hiding future generic notices.
+    calibrationNoticeSuppressedUntil = performance.now() + 3500;
+    const root = window.MMD_SA?.SpeechBubble;
+    const list = Array.isArray(root?.list) ? root.list : (root ? [root] : []);
+    list.forEach((bubble, index) => {
+      const content = speechBubbleContent(bubble);
+      if (index <= 1 || isCalibrationNotice(content.message)) {
+        hideSpeechBubbleMesh(bubble);
+        XRA.uiCore?.hideNativeNotice?.(`native-speech-${index}`);
+      }
+    });
+    // Also covers a stale DOM notice left behind after the native object was
+    // replaced and is no longer present in SpeechBubble.list.
+    XRA.uiCore?.hideNativeNotice?.('native-speech-0');
+    XRA.uiCore?.hideNativeNotice?.('native-speech-1');
+    return true;
+  }
+
+  function syncSpeechBubbleNotice(bubble, index) {
+    const id = `native-speech-${index}`;
+    const content = speechBubbleContent(bubble);
+    const calibrationNotice = isCalibrationNotice(content.message);
+    if (calibrationNotice) {
+      // The native startup text advertises X as an abort command, but the
+      // external backend cannot safely roll back the private calibration
+      // accumulator. Keep the useful status/progress and omit that false hint.
+      content.message = content.message.split(/\r?\n/)
+        .filter(line => !(/\bx\b/i.test(line) && /(press|premi|pulsa|appuyez|drück|pressione).*(abort|annull|cancel|abbrech|interromp)/i.test(line)))
+        .join('\n').trim();
+      content.actions = content.actions.filter(action => !(
+        action.key === 'X' && /(abort|annull|cancel|abbrech|interromp)/i.test(action.label)
+      ));
+    }
+    if (performance.now() < calibrationNoticeSuppressedUntil && index <= 1) {
+      hideSpeechBubbleMesh(bubble);
+      XRA.uiCore?.hideNativeNotice?.(id);
+      return;
+    }
+    if (!bubble?.visible || (!content.message && !content.actions.length)) {
+      XRA.uiCore?.hideNativeNotice?.(id);
+      return;
+    }
+    hideSpeechBubbleMesh(bubble);
+    const noticeDuration = Number(bubble?._duration) > 0
+      ? Number(bubble._duration)
+      : (calibrationNotice ? 10000 : 0);
+    XRA.uiCore?.showNativeNotice?.(id, content.message, {
+      title: 'XR Animator',
+      interactive: calibrationNotice
+        ? content.actions.length > 0
+        : speechBubbleInteractive(bubble),
+      actions: content.actions,
+      duration: noticeDuration
+    });
+  }
+
+  function patchSpeechBubble(bubble, index) {
+    if (!bubble || bubble._xraNoticePatched) return;
+    bubble._xraNoticePatched = true;
+
+    for (const method of ['show', 'message', 'hide']) {
+      const original = bubble[method];
+      if (typeof original !== 'function') continue;
+      bubble[method] = function (...args) {
+        const result = original.apply(this, args);
+        if (method === 'show' || method === 'message') hideSpeechBubbleMesh(this);
+        syncSpeechBubbleNotice(this, index);
+        return result;
+      };
+    }
+    syncSpeechBubbleNotice(bubble, index);
+  }
+
+  function installSpeechBubbleAdapter() {
+    const root = window.MMD_SA?.SpeechBubble;
+    const list = root?.list;
+    if (!root) return false;
+    if (Array.isArray(list) && list.length) list.forEach((bubble, index) => patchSpeechBubble(bubble, index));
+    else patchSpeechBubble(root, 0);
+    return true;
+  }
+
+  // The event is dispatched immediately before the native mesh is shown. A
+  // microtask runs after that show() call but before paint, so even a newly
+  // created/unpatched bubble never flashes for a visible frame.
+  const onNativeSpeechChange = () => queueMicrotask(installSpeechBubbleAdapter);
+  for (const suffix of ['', '0', '1', '2', '3']) {
+    window.addEventListener(`SA_SpeechBubble_show${suffix}`, onNativeSpeechChange);
+    window.addEventListener(`SA_SpeechBubble_hide${suffix}`, onNativeSpeechChange);
+  }
+
+  async function restartApp() {
+    try {
+      try {
+        if (typeof XRA.nativeBridge?.stopNativeStreamer === 'function') {
+          await XRA.nativeBridge.stopNativeStreamer();
+        } else {
+          const backendCamera = window.XRA_BACKEND_CAMERA;
+          if (backendCamera?.stop) await backendCamera.stop();
+          else XRA.xraBackend?.sendControl?.({ type: 'capture', action: 'stop' });
+        }
+      } catch (_) {}
+      for (const track of cameraVideoTracks()) {
+        try { track.stop(); } catch (_) {}
+      }
+    } catch (e) {}
+
+    // Check if running in NW.js desktop app: relaunch native binary XR_Animator
+    const nwApp = typeof nw !== 'undefined' ? nw.App : (window.nw?.App);
+    if (nwApp) {
+      try {
+        const path = require('path');
+        const cp = require('child_process');
+        const execDir = path.dirname(process.execPath);
+        const launcherBinary = path.join(execDir, 'XR_Animator');
+        const fs = require('fs');
+        if (fs.existsSync(launcherBinary)) {
+          // NW.js is single-instance: launching before the old process exits
+          // merely focuses the dying instance. A detached helper waits for
+          // this renderer to disappear, then starts the packaged launcher.
+          const helper = cp.spawn('/bin/sh', [
+            '-c',
+            'while kill -0 "$1" 2>/dev/null; do sleep 0.1; done; sleep 0.3; exec "$2"',
+            'xra-restart',
+            String(process.pid),
+            launcherBinary
+          ], {
+            detached: true,
+            stdio: 'ignore',
+            cwd: execDir
+          });
+          helper.unref();
+          nwApp.quit();
+          return true;
+        }
+      } catch (err) {
+        console.warn(TAG, 'Process relaunch via XR_Animator failed, falling back to reload', err);
+      }
+    }
+
+    const control = nativeClickable(/\brestart\b|\breload\b/i);
+    if (control) { control.click(); return true; }
+    location.reload();
+    return true;
+  }
+
+  async function quitApp() {
+    try {
+      try {
+        if (typeof XRA.nativeBridge?.stopNativeStreamer === 'function') {
+          await XRA.nativeBridge.stopNativeStreamer();
+        } else {
+          const backendCamera = window.XRA_BACKEND_CAMERA;
+          if (backendCamera?.stop) await backendCamera.stop();
+          else XRA.xraBackend?.sendControl?.({ type: 'capture', action: 'stop' });
+        }
+      } catch (_) {}
+      for (const track of cameraVideoTracks()) {
+        try { track.stop(); } catch (_) {}
+      }
+      try { await XRA.profileService?.save?.(); } catch (_) {}
+    } catch (e) {}
+
+    const nwApp = typeof nw !== 'undefined' ? nw.App : (window.nw?.App);
+    if (nwApp?.quit) {
+      nwApp.quit();
+      return true;
+    }
+    window.close();
+    return true;
+  }
+
+  function showAbout() {
+    const control = nativeClickable(/\babout\b/i);
+    if (control) { control.click(); return true; }
+    XRA.toast('XR Animator · XRA');
+    return true;
+  }
+
+  function openEvent(id, branch = 0) {
+    const dungeon = window.MMD_SA_options?.Dungeon;
+    if (!dungeon?.run_event) throw new Error('XR Animator event system not ready');
+    return dungeon.run_event(id, branch);
+  }
+
+  function activeVideoTrack() {
+    const c = window.System?._browser?.camera;
+    const candidates = [
+      c?.video_track,
+      c?.video?.srcObject?.getVideoTracks?.()[0],
+      c?.stream?.getVideoTracks?.()[0],
+      window.MMD_SA?.WebXR?.user_camera?.stream?.getVideoTracks?.()[0],
+      window.MMD_SA?.WebXR?.user_camera?.video?.srcObject?.getVideoTracks?.()[0]
+    ].filter(Boolean);
+    // After an explicit Stop, XR Animator can keep a reference to the ended
+    // track while a newly started live track already exists elsewhere.
+    return candidates.find(track => track.readyState === 'live') || candidates[0] || null;
+  }
+
+  function activeCamera() {
+    const track = activeVideoTrack();
+    const settings = track?.getSettings?.() || {};
+    return {
+      label: track?.label || '',
+      deviceId: settings.deviceId || '',
+      readyState: track?.readyState || ''
+    };
+  }
+
+  function cameraRunning() {
+    const track = activeVideoTrack();
+    return !cameraSoftStopped && !!track && track.readyState === 'live' && track.enabled !== false;
+  }
+
+  function persistNativeCameraPreference(label = '') {
+    label = String(label || '').trim();
+    const options = window.MMD_SA_options;
+    if (!options) return false;
+
+    options.user_camera ||= {};
+    options.user_camera.streamer_mode ||= {};
+    options.user_camera.streamer_mode.camera_preference ||= {};
+    options.user_camera.streamer_mode.camera_preference.label = label;
+
+    // Keep the imported/exported native profile in sync when it already
+    // exists. It may not be available yet while the startup card is open.
+    const imported = options._XRA_settings_imported;
+    if (imported) {
+      imported.user_camera ||= {};
+      imported.user_camera.streamer_mode ||= {};
+      imported.user_camera.streamer_mode.camera_preference ||= {};
+      imported.user_camera.streamer_mode.camera_preference.label = label;
+    }
+    return true;
+  }
+
+  function sortNativeCameraList(label = '') {
+    label = String(label || '').trim().toLocaleLowerCase();
+    const camera = window.System?._browser?.camera;
+    const list = camera?.camera_list;
+    if (!label || !Array.isArray(list) || list.length < 2) return false;
+
+    // Native streamer mode opens the first matching entry. Stable ordering
+    // preserves the browser's device order for every non-selected camera.
+    const ranked = list.map((device, index) => ({
+      device,
+      index,
+      selected: String(device?.label || '').toLocaleLowerCase().includes(label)
+    }));
+    ranked.sort((a, b) => Number(b.selected) - Number(a.selected) || a.index - b.index);
+    camera.camera_list = ranked.map(entry => entry.device);
+    return ranked[0]?.selected === true;
+  }
+
+
+  function isWebGLCanvas(node) {
+    if (!(node instanceof HTMLCanvasElement)) return false;
+    try { return !!(node.getContext('webgl2') || node.getContext('webgl') || node.getContext('experimental-webgl')); }
+    catch (e) { return false; }
+  }
+
+  function previewVideos() {
+    const out = [];
+    const activeTrack = activeVideoTrack();
+    const push = value => {
+      if (!(value instanceof HTMLVideoElement) || out.includes(value)) return;
+      out.push(value);
+    };
+    try { push(window.System?._browser?.camera?.video); } catch (e) {}
+    try { push(window.System?._browser?.camera?.video_element); } catch (e) {}
+    try { push(window.MMD_SA?.WebXR?.user_camera?.video); } catch (e) {}
+
+    // Some XR Animator builds create the webcam <video> dynamically and do not
+    // expose it through the objects above. Match the active MediaStream first;
+    // fall back to camera-labelled video nodes only.
+    document.querySelectorAll('video').forEach(video => {
+      try {
+        const tracks = video.srcObject?.getVideoTracks?.() || [];
+        if (activeTrack && tracks.some(t => t === activeTrack || (t.id && t.id === activeTrack.id))) return push(video);
+      } catch (e) {}
+      const label = `${video.id || ''} ${video.className || ''} ${video.getAttribute?.('name') || ''}`;
+      if (/(webcam|user.?camera|camera.?video|camera.?preview)/i.test(label)) push(video);
+    });
+    return out;
+  }
+
+  function nativeDisplayNode(kind) {
+    const display = window.MMD_SA_options?.user_camera?.display;
+    const value = display?.[kind];
+    return value instanceof HTMLElement ? value : null;
+  }
+
+  function setElementVisible(node, visible, parentRx = null) {
+    if (!(node instanceof HTMLElement)) return;
+    node.hidden = !visible;
+    if (!visible) {
+      node.style.setProperty('display', 'none', 'important');
+      return;
+    }
+    node.style.removeProperty('display');
+    node.style.removeProperty('visibility');
+    node.style.removeProperty('opacity');
+    if (!parentRx) return;
+
+    // Only reveal parents belonging to the same preview layer. The old broad
+    // camera/debug matcher made enabling ML debug accidentally unhide webcam.
+    let parent = node.parentElement;
+    for (let i = 0; parent && i < 2; i++, parent = parent.parentElement) {
+      const label = `${parent.id || ''} ${parent.className || ''}`;
+      if (!parentRx.test(label)) continue;
+      parent.hidden = false;
+      parent.style.removeProperty('display');
+      parent.style.removeProperty('visibility');
+      parent.style.removeProperty('opacity');
+    }
+  }
+
+  function overlayCanvasCandidates(kind) {
+    const out = [];
+    const push = value => {
+      if (!(value instanceof HTMLCanvasElement) || out.includes(value) || isWebGLCanvas(value)) return;
+      out.push(value);
+    };
+    const c = window.System?._browser?.camera;
+    const uc = window.MMD_SA?.WebXR?.user_camera;
+    for (const value of [
+      c?.canvas, c?.canvas_debug, c?.poseNet?.canvas, c?.poseNet?.canvas_debug,
+      c?.facemesh?.canvas, c?.handpose?.canvas, c?.video_canvas_facemesh,
+      c?.wireframe, c?.wireframe?.canvas, c?.poseNet?.wireframe, c?.poseNet?.wireframe?.canvas,
+      c?.facemesh?.wireframe, c?.facemesh?.wireframe?.canvas,
+      uc?.canvas, uc?.canvas_debug, uc?.poseNet?.canvas, uc?.facemesh?.canvas, uc?.handpose?.canvas,
+      uc?.video_canvas_facemesh, uc?.poseNet?.wireframe, uc?.poseNet?.wireframe?.canvas,
+      uc?.facemesh?.wireframe, uc?.facemesh?.wireframe?.canvas
+    ]) push(value);
+    const rx = kind === 'wireframe' ? /(wire|pose|mocap|landmark)/i : /(debug|ml|pose|face|hand|landmark)/i;
+    document.querySelectorAll('canvas').forEach(canvas => {
+      const label = `${canvas.id || ''} ${canvas.className || ''}`;
+      if (rx.test(label)) push(canvas);
+    });
+    return out;
+  }
+
+  // XR Animator's own Overlay & UI menu is the source of truth for preview
+  // controls. In the native _SETTINGS_ event, keys 2/3/4 dispatch Camera,
+  // Wireframe and Mocap Debug respectively. Calling the native action matters:
+  // Mocap Debug also runs DEBUG_show(), which a bare debug_hidden assignment
+  // does not do.
+  function nativeOverlayAction(key, fallbackBranch) {
+    const dungeon = window.MMD_SA_options?.Dungeon;
+    const settings = dungeon?.events?._SETTINGS_;
+    if (!settings) return null;
+
+    let branchIndex = null;
+    try {
+      const menu = settings?.[11]?.[0]?.message;
+      const branches = menu?.branch_list;
+      const spec = Array.isArray(branches)
+        ? branches.find(entry => String(entry?.key) === String(key))
+        : null;
+      branchIndex = spec?.branch_index ?? null;
+    }
+    catch (e) {}
+
+    if (branchIndex == null) branchIndex = fallbackBranch;
+    const event = settings?.[branchIndex]?.[0];
+    return (typeof event?.func === 'function') ? event : null;
+  }
+
+  function invokeNativeOverlayAction(key, fallbackBranch) {
+    const event = nativeOverlayAction(key, fallbackBranch);
+    if (!event) return false;
+    try {
+      event.func.call(event);
+      return true;
+    }
+    catch (e) {
+      console.warn(TAG, 'native overlay action failed', key, e);
+      return false;
+    }
+  }
+
+  // The native "Camera display" flag is real, but in the current desktop
+  // XR Animator renderer it is not a reliable visible webcam preview: the
+  // renderer can overwrite/hide the native node on its next update.  Reuse the
+  // *existing* live camera track in a small DOM video instead.  This does not
+  // request a second webcam stream and never stops/clones the tracking track.
+  let webcamPreviewVideo = null;
+
+  function webcamPreviewNode() {
+    if (webcamPreviewVideo?.isConnected) return webcamPreviewVideo;
+    const existing = document.getElementById('XRA_WEBCAM_PREVIEW');
+    if (existing instanceof HTMLVideoElement) {
+      webcamPreviewVideo = existing;
+      return existing;
+    }
+
+    const video = document.createElement('video');
+    video.id = 'XRA_WEBCAM_PREVIEW';
+    video.className = 'xra-webcam-preview';
+    video.autoplay = true;
+    video.muted = true;
+    video.defaultMuted = true;
+    video.playsInline = true;
+    video.controls = false;
+    try { video.disablePictureInPicture = true; } catch (e) {}
+    video.setAttribute('aria-label', 'XR Animator webcam preview');
+    video.hidden = true;
+    document.body.appendChild(video);
+    webcamPreviewVideo = video;
+    return video;
+  }
+
+  function suppressNativeCameraPreview() {
+    // Avoid a duplicate native preview if a future/native renderer happens to
+    // honour the legacy flag. Our DOM preview is the single source of truth.
+    try {
+      const display = window.MMD_SA_options?.user_camera?.display;
+      if (display?.video && !(display.video instanceof HTMLElement)) display.video.hidden = true;
+    } catch (e) {}
+  }
+
+  function bindWebcamPreviewStream() {
+    const video = webcamPreviewNode();
+    const track = activeVideoTrack();
+    if (!track || track.readyState !== 'live' || track.enabled === false || cameraSoftStopped) {
+      video.hidden = true;
+      try { video.pause(); } catch (e) {}
+      return false;
+    }
+
+    let currentTrack = null;
+    try { currentTrack = video.srcObject?.getVideoTracks?.()[0] || null; } catch (e) {}
+    if (!currentTrack || currentTrack !== track || currentTrack.readyState !== 'live') {
+      // Prefer an already-existing native MediaStream so audio/video ownership
+      // and browser device state remain entirely with XR Animator.
+      let stream = null;
+      for (const source of previewVideos()) {
+        if (source === video) continue;
+        try {
+          const sourceTrack = source.srcObject?.getVideoTracks?.()[0];
+          if (sourceTrack === track || (sourceTrack?.id && sourceTrack.id === track.id)) {
+            stream = source.srcObject;
+            break;
+          }
+        } catch (e) {}
+      }
+      if (!stream) {
+        try { stream = new MediaStream([track]); }
+        catch (e) { console.warn(TAG, 'cannot bind webcam preview stream', e); }
+      }
+      if (stream) {
+        try { video.srcObject = stream; } catch (e) { console.warn(TAG, 'cannot set webcam preview srcObject', e); }
+      }
+    }
+
+    video.hidden = false;
+    video.classList.toggle('xra-webcam-mirrored', !!config.devices?.mirror_preview);
+    try {
+      const play = video.play?.();
+      if (play?.catch) play.catch(() => {});
+    } catch (e) {}
+    suppressNativeCameraPreview();
+    return true;
+  }
+
+  function setWebcamPreviewVisible(visible) {
+    visible = !!visible;
+    const video = webcamPreviewNode();
+    suppressNativeCameraPreview();
+    if (!visible) {
+      video.hidden = true;
+      try { video.pause(); } catch (e) {}
+      return false;
+    }
+
+    // The native stream can become available a little after the UI toggle or
+    // after a camera restart. Retry binding without opening a second capture.
+    if (bindWebcamPreviewStream()) return true;
+    for (const delay of [120, 450, 1000, 1800]) {
+      setTimeout(() => {
+        if (config.ui?.preview_video === true) bindWebcamPreviewStream();
+      }, delay);
+    }
+    return true;
+  }
+
+  function getPreviewVisibility(kind) {
+    const display = window.MMD_SA_options?.user_camera?.display;
+    if (kind === 'video') return config.ui?.preview_video === true;
+    if (kind === 'wireframe') return !display?.wireframe?.hidden;
+    if (kind === 'debug') return !window.MMD_SA_options?.user_camera?.ML_models?.debug_hidden;
+    return false;
+  }
+
+  function setNativeMocapDebug(visible, { forceRefresh = false } = {}) {
+    const ml = window.MMD_SA_options?.user_camera?.ML_models;
+    if (!ml) return false;
+    const targetHidden = !visible;
+    document.body?.classList.toggle('xra-native-debug-visible', !!visible);
+
+    if (!!ml.debug_hidden !== targetHidden) {
+      // Native branch 15 toggles debug_hidden AND calls DEBUG_show(). The
+      // missing DEBUG_show() call is why the old custom OFF switch could leave
+      // Hand-FPS / Face-FPS text stuck on screen.
+      if (!invokeNativeOverlayAction(4, 15)) {
+        ml.debug_hidden = targetHidden;
+        try { window.DEBUG_show?.(); } catch (e) {}
+      }
+    }
+    else if (forceRefresh) {
+      // Re-run the debug renderer without changing the final state. Most
+      // builds expose DEBUG_show globally; if not, a native double-toggle is a
+      // safe fallback and ends on the same value.
+      if (typeof window.DEBUG_show === 'function') {
+        try { window.DEBUG_show(); } catch (e) {}
+      }
+      else {
+        const first = invokeNativeOverlayAction(4, 15);
+        if (first) invokeNativeOverlayAction(4, 15);
+      }
+    }
+
+    return !!ml.debug_hidden === targetHidden;
+  }
+
+  function setPreviewVisibility(kind, visible, { remember = true, forceRefresh = false } = {}) {
+    visible = !!visible;
+    config.ui ||= {};
+
+    if (kind === 'video') {
+      if (remember) config.ui.preview_video = visible;
+      setWebcamPreviewVisible(visible);
+    }
+    else if (kind === 'wireframe') {
+      if (remember) config.ui.preview_wireframe = visible;
+      const display = window.MMD_SA_options?.user_camera?.display;
+      if (display?.wireframe && !(display.wireframe instanceof HTMLElement)) {
+        try { display.wireframe.hidden = !visible; } catch (e) {}
+      }
+      const nativeNode = nativeDisplayNode('wireframe');
+      if (nativeNode) setElementVisible(nativeNode, visible, /(wire|pose|mocap|landmark|preview)/i);
+      XRA.ensureMocapWireframeLayer?.();
+      for (const node of overlayCanvasCandidates('wireframe')) setElementVisible(node, visible, /(wire|pose|mocap|landmark)/i);
+    }
+    else if (kind === 'debug') {
+      if (remember) config.ui.preview_debug = visible;
+      setNativeMocapDebug(visible, { forceRefresh });
+    }
+
+    events.emit('preview-visibility', { kind, visible: getPreviewVisibility(kind) });
+    return getPreviewVisibility(kind);
+  }
+
+  function restorePreviewVisibility({ forceRefresh = false } = {}) {
+    const ui = config.ui || {};
+    const display = window.MMD_SA_options?.user_camera?.display;
+
+    const video = typeof ui.preview_video === 'boolean'
+      ? ui.preview_video
+      : false;
+    const wire = typeof ui.preview_wireframe === 'boolean'
+      ? ui.preview_wireframe
+      : !display?.wireframe?.hidden;
+    const debug = typeof ui.preview_debug === 'boolean'
+      ? ui.preview_debug
+      : false;
+
+    setPreviewVisibility('video', video, { remember: false, forceRefresh });
+    setPreviewVisibility('wireframe', wire, { remember: false });
+    setPreviewVisibility('debug', debug, { remember: false, forceRefresh });
+    return { video: getPreviewVisibility('video'), wireframe: getPreviewVisibility('wireframe'), debug: getPreviewVisibility('debug') };
+  }
+
+  function schedulePreviewRestore() {
+    // Reconcile after camera startup/restart without CSS forcing. Native camera
+    // initialization can overwrite display flags once while the stream comes up.
+    for (const [index, delay] of [100, 600, 1500].entries()) setTimeout(() => {
+      try { restorePreviewVisibility({ forceRefresh: index === 1 }); } catch (e) {}
+    }, delay);
+  }
+
+  function applyWebcamMirror(value = config.devices?.mirror_preview) {
+    value = !!value;
+    for (const video of previewVideos()) video.classList.toggle('xra-webcam-mirrored', value);
+    try { webcamPreviewNode()?.classList.toggle('xra-webcam-mirrored', value); } catch (e) {}
+    return value;
+  }
+
+  async function setWebcamMirror(value) {
+    config.devices ||= {};
+    config.devices.mirror_preview = !!value;
+    applyWebcamMirror(value);
+    await XRA.profileService.save();
+    events.emit('camera-mirror', !!value);
+    return !!value;
+  }
+
+  function applyWebcamSelfie(value = config.devices?.selfie_mode) {
+    value = !!value;
+    const uc = window.MMD_SA?.WebXR?.user_camera;
+    if (uc) uc.video_flipped = value;
+    return value;
+  }
+
+  async function setWebcamSelfie(value) {
+    return runCameraOp('selfie', async () => {
+      config.devices ||= {};
+      config.devices.selfie_mode = !!value;
+      const uc = window.MMD_SA?.WebXR?.user_camera;
+      if (uc) {
+        // video_flipped is live; calling user_camera.start() here also opens
+        // XR Animator's legacy webcam-selection/calibration speech bubble.
+        // The flip is already effective without restarting the camera.
+        uc.video_flipped = !!value;
+      }
+      if (XRA?.xraBackend?.active === true) {
+        try {
+          const backendCamera = window.XRA_BACKEND_CAMERA;
+          if (typeof backendCamera?.configure !== 'function') throw new Error('backend camera control unavailable');
+          await backendCamera.configure({ selfie_mode: !!value });
+        } catch (e) {
+          console.warn(TAG, 'setWebcamSelfie backend configure failed', e);
+          throw e;
+        }
+      }
+      applyWebcamSelfie(value);
+      applyWebcamMirror();
+      schedulePreviewRestore();
+      await XRA.profileService.save();
+      events.emit('camera-selfie', !!value);
+      return !!value;
+    });
+  }
+
+  function cameraVideoTracks() {
+    const tracks = new Set();
+    const addStream = stream => stream?.getVideoTracks?.().forEach(track => tracks.add(track));
+    const c = window.System?._browser?.camera;
+    if (c?.video_track) tracks.add(c.video_track);
+    addStream(c?.video?.srcObject);
+    addStream(c?.stream);
+    addStream(window.MMD_SA?.WebXR?.user_camera?.stream);
+    addStream(window.MMD_SA?.WebXR?.user_camera?.video?.srcObject);
+    return [...tracks];
+  }
+
+  function previewHealth() {
+    const track = activeVideoTrack();
+    const videos = previewVideos();
+    const live = !!track && track.readyState === 'live' && track.enabled !== false && !cameraSoftStopped;
+    const playing = videos.some(video => {
+      try {
+        const streamTrack = video.srcObject?.getVideoTracks?.()[0];
+        const sameOrLive = !streamTrack || streamTrack.readyState === 'live';
+        return sameOrLive && video.readyState >= 2 && video.videoWidth > 0 && video.videoHeight > 0;
+      } catch (e) { return false; }
+    });
+    // Some XR Animator layouts do not expose a visible HTMLVideoElement even
+    // though the camera track is healthy. In that case a live, unmuted track
+    // is sufficient.
+    const healthy = live && (playing || (!videos.length && !track.muted));
+    return { healthy, live, playing, muted: !!track?.muted, readyState: track?.readyState || '', track };
+  }
+
+  async function waitForHealthyCamera(label = '', timeout = 6500) {
+    const started = performance.now();
+    let last = activeCamera();
+    let health = previewHealth();
+    while (performance.now() - started < timeout) {
+      last = activeCamera();
+      health = previewHealth();
+      const labelOk = !label || String(last.label || '').includes(label);
+      if (last.readyState === 'live' && labelOk && health.healthy) return { ...last, healthy: true };
+      // A live camera with valid track but video element not painted yet is
+      // accepted after a short grace period to avoid false restart loops.
+      if (last.readyState === 'live' && labelOk && performance.now() - started > 1800 && !health.muted) {
+        return { ...last, healthy: true };
+      }
+      await util.sleep(120);
+    }
+    return { ...last, healthy: false, health };
+  }
+
+  async function startNativeUntilCameraReady(camera, timeout = 6500) {
+    const label = config.devices?.camera_label || '';
+    const healthPromise = waitForHealthyCamera(label, timeout);
+    const nativeOutcome = Promise.resolve()
+      .then(() => camera.streamer_mode.start())
+      .then(() => ({ kind:'native' }), error => ({ kind:'error', error }));
+    const first = await Promise.race([
+      nativeOutcome,
+      healthPromise.then(active => ({ kind:'camera', active }))
+    ]);
+    if (first.kind === 'error') throw first.error;
+
+    // Native start intentionally waits for the first face/body detections, not
+    // merely for the webcam. Let the UI continue as soon as the video track is
+    // healthy while mocap initialization finishes in the background.
+    const active = first.kind === 'camera' ? first.active : await healthPromise;
+      if (!active.healthy) throw new Error('Webcam did not start');
+    if (first.kind === 'camera') {
+      XRA.debug?.record('camera.native-start-pending-mocap', { state:cameraDebugState() });
+    }
+    return active;
+  }
+
+  async function _stopNativeStreamer() {
+    const c = window.System?._browser?.camera;
+    if (!c?.streamer_mode) throw new Error('Native streamer mode not ready');
+
+    // IMPORTANT: do not call MediaStreamTrack.stop(). XR Animator keeps native
+    // references to that track; ending it makes a later Start unreliable/black.
+    // enabled=false is reversible and normally releases camera capture work while
+    // preserving the native stream graph.
+    cameraSoftStopped = true;
+    for (const track of cameraVideoTracks()) {
+      try { track.enabled = false; } catch (e) {}
+    }
+    for (const video of previewVideos()) {
+      try { video.pause?.(); } catch (e) {}
+    }
+    await util.sleep(80);
+    events.emit('camera-stopped');
+    return activeCamera();
+  }
+
+  async function stopNativeStreamer() {
+    return runCameraOp('stop', () => _stopNativeStreamer());
+  }
+
+  async function resumeExistingCamera() {
+    const tracks = cameraVideoTracks().filter(track => track?.readyState === 'live');
+    if (!tracks.length) return null;
+    for (const track of tracks) {
+      try { track.enabled = true; } catch (e) {}
+    }
+    cameraSoftStopped = false;
+    for (const video of previewVideos()) {
+      try { await video.play?.(); } catch (e) {}
+    }
+    const active = await waitForHealthyCamera(config.devices?.camera_label || '', 2200);
+    if (active.healthy) {
+      applyWebcamMirror();
+      applyWebcamSelfie();
+      schedulePreviewRestore();
+      return active;
+    }
+    return null;
+  }
+
+  async function _restartNativeStreamer({ recovery = false } = {}) {
+    const c = window.System?._browser?.camera;
+    if (!c?.streamer_mode) throw new Error('Native streamer mode not ready');
+    XRA.performance?.prepareStartupMocap?.('native-bridge-restart');
+
+    if (window.MMD_SA_options?.Dungeon?.event_mode) {
+      try { XRA.uiCore?.sendEscape?.(); } catch (e) {}
+      await util.sleep(50);
+    }
+
+    // If XR Animator exposes its own stop(), use that for an explicit Restart;
+    // never manually end MediaStreamTracks.
+    try {
+      if (typeof c.streamer_mode.stop === 'function') {
+        await c.streamer_mode.stop();
+        await util.sleep(180);
+      }
+      else {
+        cameraSoftStopped = true;
+        for (const track of cameraVideoTracks()) {
+          try { track.enabled = false; } catch (e) {}
+        }
+        await util.sleep(100);
+      }
+    } catch (e) { console.warn(TAG, 'native restart stop failed', e); }
+
+    cameraSoftStopped = false;
+    let directError = null;
+    if (typeof c.streamer_mode.start === 'function') {
+      try {
+        const active = await startNativeUntilCameraReady(c, recovery ? 5000 : 6500);
+        // A native start can reuse the old live track; make sure it is enabled.
+        for (const track of cameraVideoTracks()) {
+          if (track?.readyState === 'live') { try { track.enabled = true; } catch (e) {} }
+        }
+        if (active.healthy) {
+          applyWebcamMirror();
+          applyWebcamSelfie();
+          schedulePreviewRestore();
+          return active;
+        }
+      } catch (e) { directError = e; }
+    }
+
+    // Compatibility fallback: invoke the native streamer inventory action once.
+    try {
+      const inv = window.MMD_SA_options?.Dungeon?.inventory?.find?.('streamer_mode');
+      if (inv) {
+        const actionable = await inv.action_check?.();
+        if (actionable !== false && typeof inv.item?.action?.func === 'function') {
+          await inv.item.action.func(inv.item);
+          for (const track of cameraVideoTracks()) {
+            if (track?.readyState === 'live') { try { track.enabled = true; } catch (e) {} }
+          }
+          const active = await waitForHealthyCamera(config.devices?.camera_label || '', 6500);
+          if (active.healthy) {
+            applyWebcamMirror();
+            applyWebcamSelfie();
+            schedulePreviewRestore();
+            return active;
+          }
+        }
+      }
+    } catch (e) {
+      console.warn(TAG, 'inventory restart fallback failed', e);
+      directError ||= e;
+    }
+
+    throw directError || new Error('Webcam restart did not produce a healthy video stream');
+  }
+
+  async function restartNativeStreamer() {
+    return runCameraOp('restart', async () => {
+      const active = await _restartNativeStreamer();
+      events.emit('camera-started', active);
+      return active;
+    });
+  }
+
+  async function _startNativeStreamer() {
+    await XRA.whenNativeReady();
+    XRA.performance?.prepareStartupMocap?.('native-bridge-start');
+    XRA.performance?.installStartupMocapStartGuard?.();
+    XRA.performance?.ensureStartupCalibrationBoost?.();
+
+    // Fast/reliable path after our Stop: revive the exact same native stream.
+    const resumed = await resumeExistingCamera();
+    if (resumed) return resumed;
+
+    cameraSoftStopped = false;
+    const active = activeCamera();
+    if (active.readyState === 'live') {
+      for (const track of cameraVideoTracks()) {
+        if (track?.readyState === 'live') { try { track.enabled = true; } catch (e) {} }
+      }
+      for (const video of previewVideos()) { try { await video.play?.(); } catch (e) {} }
+      const healthy = await waitForHealthyCamera(config.devices?.camera_label || '', 1800);
+      if (healthy.healthy) {
+        applyWebcamMirror(); applyWebcamSelfie(); schedulePreviewRestore();
+        return healthy;
+      }
+    }
+
+    // Cold start: use XR Animator's intended native entry point directly.
+    const c = window.System?._browser?.camera;
+    if (!c?.streamer_mode || typeof c.streamer_mode.start !== 'function') throw new Error('Native streamer start is not ready');
+    const started = await startNativeUntilCameraReady(c, 6500);
+    for (const track of cameraVideoTracks()) {
+      if (track?.readyState === 'live') { try { track.enabled = true; } catch (e) {} }
+    }
+    applyWebcamMirror();
+    applyWebcamSelfie();
+    schedulePreviewRestore();
+    return started;
+  }
+
+  async function startNativeStreamer() {
+    return runCameraOp('start', async () => {
+      const active = await _startNativeStreamer();
+      events.emit('camera-started', active);
+      return active;
+    });
+  }
+
+  async function enumerateCameras({ requestPermission = false } = {}) {
+    if (!navigator.mediaDevices?.enumerateDevices) return [];
+
+    let devices = await navigator.mediaDevices.enumerateDevices();
+    let cameras = devices.filter(d => d.kind === 'videoinput');
+
+    // Do not open a second temporary camera stream while XR Animator already
+    // owns a webcam. Some Linux/V4L2 devices expose only one capture handle and
+    // the permission probe can blank the existing stream.
+    if (requestPermission && cameras.length && cameras.every(d => !d.label) && activeCamera().readyState !== 'live') {
+      let temp = null;
+      try { temp = await navigator.mediaDevices.getUserMedia({ video: true, audio: false }); }
+      finally { temp?.getTracks?.().forEach(t => t.stop()); }
+      devices = await navigator.mediaDevices.enumerateDevices();
+      cameras = devices.filter(d => d.kind === 'videoinput');
+    }
+
+    return cameras.map((d, i) => ({
+      deviceId: d.deviceId,
+      groupId: d.groupId,
+      label: d.label || `Camera ${i + 1}`
+    }));
+  }
+
+  function constraintsMatchSettings(constraints, settings) {
+    if (!constraints || !settings) return false;
+    const val = x => (x && typeof x === 'object') ? (x.exact ?? x.ideal ?? x.max ?? x.min) : x;
+    const pairs = [
+      ['width', Number(settings.width || 0)],
+      ['height', Number(settings.height || 0)],
+      ['frameRate', Number(settings.frameRate || 0)]
+    ];
+    let compared = 0;
+    for (const [key, current] of pairs) {
+      const requested = Number(val(constraints[key]) || 0);
+      if (!requested || !current) continue;
+      compared++;
+      const tolerance = key === 'frameRate' ? 1.5 : 2;
+      if (Math.abs(requested - current) > tolerance) return false;
+    }
+    return compared > 0;
+  }
+
+  async function _applyCameraConstraintsSafe(constraints, { recover = true } = {}) {
+    const track = activeVideoTrack();
+    if (!track || track.readyState !== 'live' || typeof track.applyConstraints !== 'function' || !constraints) return false;
+    const before = track.getSettings?.() || {};
+    if (constraintsMatchSettings(constraints, before)) return true;
+
+    try {
+      await track.applyConstraints(constraints);
+      const healthy = await waitForHealthyCamera('', 1800);
+      if (healthy.healthy) {
+        events.emit('camera-constraints', { ok: true, settings: track.getSettings?.() || {} });
+        return true;
+      }
+      throw new Error('Camera became unhealthy after applying constraints');
+    }
+    catch (error) {
+      console.warn(TAG, 'camera constraints failed/unhealthy; rolling back', error);
+      try {
+        const rollback = {};
+        if (before.width) rollback.width = { ideal: before.width };
+        if (before.height) rollback.height = { ideal: before.height };
+        if (before.frameRate) rollback.frameRate = { ideal: before.frameRate };
+        if (Object.keys(rollback).length && track.readyState === 'live') await track.applyConstraints(rollback);
+      } catch (rollbackError) { console.warn(TAG, 'camera constraint rollback failed', rollbackError); }
+
+      if (recover) {
+        try {
+          const recovered = await _restartNativeStreamer({ recovery: true });
+          events.emit('camera-recovered', { reason: 'constraints', camera: recovered });
+          XRA.toast('Webcam recovered after an unsupported/unstable setting.', 'info', 3500);
+          return true;
+        } catch (recoveryError) {
+          events.emit('camera-recovery-error', recoveryError);
+          throw recoveryError;
+        }
+      }
+      throw error;
+    }
+  }
+
+  async function applyCameraConstraintsSafe(constraints, options = {}) {
+    return runCameraOp('constraints', () => _applyCameraConstraintsSafe(constraints, options));
+  }
+
+  async function ensureCameraHealthy({ recover = false } = {}) {
+    const health = previewHealth();
+    if (health.healthy) return true;
+    if (!recover || activeCamera().readyState !== 'live') return false;
+    return runCameraOp('health-recovery', async () => {
+      const again = previewHealth();
+      if (again.healthy) return true;
+      await _restartNativeStreamer({ recovery: true });
+      events.emit('camera-recovered', { reason: 'health-check', camera: activeCamera() });
+      return true;
+    });
+  }
+
+
+  async function setCameraPreference({ deviceId = '', label = '' } = {}) {
+    config.devices ||= {};
+    config.devices.camera_device_id = deviceId || '';
+    config.devices.camera_label = label || '';
+    persistNativeCameraPreference(label);
+    sortNativeCameraList(label);
+    await XRA.profileService.save(0);
+    events.emit('camera-preference', { deviceId, label });
+    return { deviceId, label };
+  }
+
+  async function switchCamera({ deviceId = '', label = '' } = {}) {
+    return runCameraOp('switch-device', async () => {
+      await XRA.whenNativeReady();
+
+      config.devices ||= {};
+      config.devices.camera_device_id = deviceId || '';
+      config.devices.camera_label = label || '';
+      persistNativeCameraPreference(label);
+      sortNativeCameraList(label);
+      await XRA.profileService.save(0);
+      events.emit('camera-switching', { deviceId, label });
+
+      try {
+        const active = await _restartNativeStreamer();
+        const ok = active.readyState === 'live' && (!label || String(active.label || '').includes(label));
+        if (!ok) throw new Error(`Requested “${label || 'default'}”, active camera is “${active.label || 'unknown'}”`);
+
+        config.devices.camera_device_id = active.deviceId || deviceId || '';
+        config.devices.camera_label = active.label || label || '';
+        applyWebcamMirror();
+        await XRA.profileService.save(0);
+        events.emit('camera-switched', active);
+        XRA.toast(`Webcam attiva: ${active.label || 'default'}`);
+        return active;
+      }
+      catch (e) {
+        events.emit('camera-switch-error', e);
+        XRA.toast('Cambio webcam fallito: ' + e.message, 'error', 5000);
+        throw e;
+      }
+    });
+  }
+
+
+  XRA.nativeBridge = {
+    item,
+    invokeItem,
+    openEvent,
+    activeCamera,
+    enumerateCameras,
+    switchCamera,
+    setCameraPreference,
+    restartNativeStreamer,
+    startNativeStreamer,
+    stopNativeStreamer,
+    setWebcamMirror,
+    applyWebcamMirror,
+    setWebcamSelfie,
+    applyWebcamSelfie,
+    cameraRunning,
+    getPreviewVisibility,
+    setPreviewVisibility,
+    restorePreviewVisibility,
+    applyCameraConstraintsSafe,
+    ensureCameraHealthy,
+    cameraHealth: previewHealth,
+    cameraBusy: () => cameraBusy,
+    openVrmPicker,
+    restoreSavedVrm,
+    isAvatarReady,
+    isAvatarLoading: () => !!(vrmLoadBusy || vrmRestoreInFlight || (savedAvatarFilename() && !initialVrmRestored)),
+    hideNativeShellChrome,
+    dismissCalibrationNotices,
+    beginCalibrationNotices,
+    restartApp,
+    quitApp,
+    showAbout
+  };
+
+  window.addEventListener('MMDStarted', () => setTimeout(async () => {
+    applyWebcamMirror();
+    applyWebcamSelfie();
+    restorePreviewVisibility({ forceRefresh: true });
+    restoreSavedVrm();
+  }, 900));
+  window.addEventListener('MMDStarted', () => {
+    for (const delay of [0, 120, 500, 1500]) setTimeout(installSpeechBubbleAdapter, delay);
+  });
+  events.on('camera-stopped', () => {
+    try {
+      const video = webcamPreviewNode();
+      video.hidden = true;
+      video.pause?.();
+    } catch (e) {}
+  });
+  events.on('camera-started', () => {
+    if (config.ui?.preview_video === true) setWebcamPreviewVisible(true);
+  });
+  events.on('calibrated', dismissCalibrationNotices);
+
+  events.on('profile-loaded', () => {
+    setTimeout(() => { applyWebcamMirror(); applyWebcamSelfie(); }, 250);
+    setTimeout(() => restorePreviewVisibility({ forceRefresh: true }), 500);
+    setTimeout(restoreSavedVrm, 900);
+  });
+
+  const refreshNativeShell = () => { try { return hideNativeShellChrome(); } catch (e) { return { top:false, badge:false }; } };
+  function watchNativeShell() {
+    refreshNativeShell();
+    if (!document.body || typeof MutationObserver !== 'function') return;
+    let timer = 0;
+    const observer = new MutationObserver(() => {
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        const state = refreshNativeShell();
+        if (state.top && state.badge) observer.disconnect();
+      }, 60);
+    });
+    observer.observe(document.body, { childList:true, subtree:true });
+    setTimeout(() => observer.disconnect(), 15000);
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', () => setTimeout(watchNativeShell, 80), { once:true });
+  else setTimeout(watchNativeShell, 80);
+  window.addEventListener('MMDStarted', () => setTimeout(refreshNativeShell, 250));
+
+})();
+
+;(() => {
+  'use strict';
+  if (globalThis.__XRA_NATIVE_BACKEND_ROUTE__) return;
+  globalThis.__XRA_NATIVE_BACKEND_ROUTE__ = true;
+
+  function install(attempt = 0) {
+    const XRA = globalThis.XRA;
+    const config = XRA?.config || XRA?.profile?.custom || {};
+    const bridge = XRA?.nativeBridge;
+    if (!bridge) {
+      if (attempt < 100) setTimeout(() => install(attempt + 1), 25);
+      return;
+    }
+    if (bridge.__xraBackendRouteV5) return;
+    const original = {};
+    for (const name of [
+      'activeCamera', 'cameraRunning', 'enumerateCameras', 'switchCamera',
+      'setCameraPreference', 'restartNativeStreamer', 'startNativeStreamer',
+      'stopNativeStreamer', 'applyCameraConstraintsSafe', 'ensureCameraHealthy',
+      'cameraHealth',
+    ]) original[name] = bridge[name];
+
+    const deviceIndex = new Map();
+    const external = () => XRA?.xraBackend?.active === true;
+    const api = () => globalThis.XRA_BACKEND_CAMERA;
+    const capture = () => api()?.status?.().backend?.capture || XRA?.xraBackend?.snapshot?.().capture || {};
+    const valueOf = value => (value && typeof value === 'object')
+      ? (value.exact ?? value.ideal ?? value.max ?? value.min)
+      : value;
+
+    function externalActiveCamera() {
+      const status = capture();
+      const running = !!status.running && !status.paused
+        && status.camera_open === true && status.available === true;
+      return {
+        label: status.device ? `Python · ${status.device}` : 'Python backend camera',
+        deviceId: String(status.device ?? status.index ?? ''),
+        readyState: running ? 'live' : 'ended',
+        backend: 'python',
+      };
+    }
+
+    function setCamPropertySafe(obj, prop, val) {
+      if (!obj || typeof obj !== 'object') return;
+      try {
+        obj[prop] = val;
+        return;
+      } catch (_) {}
+      try {
+        let customVal = val;
+        let originalGet = null;
+        let cur = obj;
+        while (cur && !originalGet) {
+          const d = Object.getOwnPropertyDescriptor(cur, prop);
+          if (d?.get) originalGet = d.get;
+          cur = Object.getPrototypeOf(cur);
+        }
+        Object.defineProperty(obj, prop, {
+          configurable: true,
+          enumerable: true,
+          get() {
+            return customVal !== undefined ? customVal : (originalGet ? originalGet.call(this) : false);
+          },
+          set(v) {
+            customVal = v;
+          }
+        });
+      } catch (_) {}
+    }
+
+    function ensureExternalTrackingActive() {
+      const cam = window.System?._browser?.camera;
+      if (cam) {
+        if (typeof XRA?.ensureVideoCanvas === 'function') {
+          XRA.ensureVideoCanvas(cam);
+        } else if (!cam.video_canvas) {
+          try {
+            const canvas = document.createElement('canvas');
+            canvas.width = 960;
+            canvas.height = 540;
+            const ctx = canvas.getContext?.('2d');
+            if (ctx) {
+              ctx.fillStyle = '#000000';
+              ctx.fillRect(0, 0, canvas.width, canvas.height);
+            }
+            cam.video_canvas = canvas;
+            cam.video_canvas_context = ctx;
+          } catch (e) {}
+        }
+        if (!cam.initialized) {
+          if (typeof cam.init_stream === 'function') {
+            try { cam.init_stream(); } catch (e) {}
+          }
+          cam.initialized = true;
+        }
+        if (!cam.video) {
+          cam.video = cam._video = document.createElement('video');
+          cam.video.autoplay = true;
+          cam.video.loop = true;
+        }
+        if (cam.video && !cam.video.srcObject && cam.video_canvas?.captureStream) {
+          try {
+            const stream = cam.video_canvas.captureStream(30);
+            cam.stream = stream;
+            cam.video.srcObject = stream;
+            cam.video.play().catch(() => {});
+          } catch (e) {}
+        }
+        if (!window._xra_canvas_heartbeat) {
+          window._xra_canvas_heartbeat = setInterval(() => {
+            const c = window.System?._browser?.camera;
+            if (c?.video_canvas_context) {
+              c.video_canvas_context.fillStyle = 'rgba(0,0,0,0.01)';
+              c.video_canvas_context.fillRect(0, 0, 1, 1);
+            }
+          }, 100);
+        }
+        setCamPropertySafe(cam, 'ML_enabled', true);
+        setCamPropertySafe(cam, 'mocap_enabled', true);
+        setCamPropertySafe(cam, 'running', true);
+        cam.visible = true;
+        if (cam.poseNet) cam.poseNet.enabled = true;
+        else cam.poseNet = { enabled: true };
+        if (cam.facemesh) cam.facemesh.enabled = true;
+        else cam.facemesh = { enabled: true };
+        if (window.MMD_SA_options?.user_camera?.display?.wireframe) {
+          window.MMD_SA_options.user_camera.display.wireframe.hidden = false;
+        }
+        if (cam.video_canvas_facemesh) {
+          cam.video_canvas_facemesh.style.visibility = 'inherit';
+        }
+      }
+      const userCam = window.MMD_SA?.WebXR?.user_camera;
+      if (userCam && userCam !== cam) {
+        userCam.initialized = true;
+        userCam.visible = true;
+        setCamPropertySafe(userCam, 'ML_enabled', true);
+        setCamPropertySafe(userCam, 'mocap_enabled', true);
+        setCamPropertySafe(userCam, 'running', true);
+        if (userCam.poseNet) userCam.poseNet.enabled = true;
+        else userCam.poseNet = { enabled: true };
+        if (userCam.facemesh) userCam.facemesh.enabled = true;
+        else userCam.facemesh = { enabled: true };
+      }
+      wrapInitMocap();
+    }
+
+    function wrapInitMocap() {
+      const sm = window.System?._browser?.camera?.streamer_mode;
+      if (!sm || sm._xra_mocap_wrapped) return;
+      const origInit = sm.init_mocap;
+      sm.init_mocap = function(type) {
+        const res = origInit ? origInit.apply(this, arguments) : undefined;
+        if (external()) {
+          const cam = window.System?._browser?.camera;
+          const userCam = window.MMD_SA?.WebXR?.user_camera;
+          if (type === 'Face') {
+            // In native backend, poseNet worker MUST stay enabled because it hosts
+            // mocap_lib_module.js and forwards face landmarks to facemesh.worker_onmessage.
+            if (cam?.poseNet) cam.poseNet.enabled = true;
+            if (userCam?.poseNet) userCam.poseNet.enabled = true;
+            if (cam?.handpose) cam.handpose.enabled = false;
+            if (userCam?.handpose) userCam.handpose.enabled = false;
+            api().configure({ mocap_mode: 'face' }).catch(() => {});
+          } else {
+            if (cam?.poseNet) cam.poseNet.enabled = true;
+            if (userCam?.poseNet) userCam.poseNet.enabled = true;
+            api().configure({ mocap_mode: 'holistic' }).catch(() => {});
+          }
+          if (cam?.facemesh) cam.facemesh.enabled = true;
+          if (userCam?.facemesh) userCam.facemesh.enabled = true;
+          const mm = window.MMD_SA?.MMD?.motionManager;
+          if (mm?.para_SA) {
+            setCamPropertySafe(mm.para_SA, 'motion_tracking_enabled', true);
+          }
+        }
+        return res;
+      };
+      sm._xra_mocap_wrapped = true;
+    }
+
+    function ensureExternalTrackingStopped() {
+      const cam = window.System?._browser?.camera;
+      if (cam) {
+        if (cam.poseNet) cam.poseNet.enabled = false;
+        if (cam.streamer_mode) setCamPropertySafe(cam.streamer_mode, 'running', false);
+        setCamPropertySafe(cam, 'ML_enabled', false);
+        setCamPropertySafe(cam, 'mocap_enabled', false);
+        setCamPropertySafe(cam, 'running', false);
+      }
+      const userCam = window.MMD_SA?.WebXR?.user_camera;
+      if (userCam && userCam !== cam) {
+        if (userCam.poseNet) userCam.poseNet.enabled = false;
+        if (userCam.streamer_mode) setCamPropertySafe(userCam.streamer_mode, 'running', false);
+        setCamPropertySafe(userCam, 'ML_enabled', false);
+        setCamPropertySafe(userCam, 'mocap_enabled', false);
+        setCamPropertySafe(userCam, 'running', false);
+      }
+    }
+
+    bridge.activeCamera = function (...args) {
+      return external() ? externalActiveCamera() : original.activeCamera?.apply(this, args);
+    };
+    bridge.cameraRunning = function (...args) {
+      if (external()) {
+        const cam = window.System?._browser?.camera;
+        const browserActive = !!(cam?.running && cam?.ML_enabled);
+        const status = capture();
+        const pythonActive = !!status.running && !status.paused;
+        return browserActive && pythonActive;
+      }
+      return !!original.cameraRunning?.apply(this, args);
+    };
+    let activeCalSession = null;
+
+    function runExternalStartupCalibration(devLabel = '') {
+      bridge.beginCalibrationNotices?.();
+      let cleanupDone = false;
+      let autoDismissTimer = null;
+      const bubbleParams = {
+        font_scale: 1,
+        font: '"Segoe UI",Roboto,Ubuntu,"SF Pro"'
+      };
+
+      const translate = (key, fallback) => {
+        try {
+          const value = window.System?._browser?.translation?.get?.(key);
+          if (value && value !== `(${key})`) return value;
+        } catch (e) {}
+        return fallback;
+      };
+
+      const nativeBubble = index => {
+        const speech = window.MMD_SA?.SpeechBubble;
+        return speech?.list?.[index] || speech || null;
+      };
+
+      function hideSpeechBubbleMesh(bubble) {
+        if (!bubble) return;
+        try {
+          const mesh = window.MMD_SA?.THREEX?.mesh_obj
+            ?.get?.('SpeechBubbleMESH' + (bubble.index || ''));
+          if (typeof mesh?.hide === 'function') mesh.hide();
+          else if (bubble._mesh) bubble._mesh.visible = false;
+        } catch (e) {
+          try { if (bubble._mesh) bubble._mesh.visible = false; } catch (ignore) {}
+        }
+      }
+
+      function publishNotice(index, message, duration = 0) {
+        const bubble = nativeBubble(index);
+        if (typeof XRA.uiCore?.showNativeNotice === 'function') {
+          try {
+            hideSpeechBubbleMesh(bubble);
+            XRA.uiCore.showNativeNotice(`native-speech-${index}`, message, {
+              title: 'XR Animator',
+              duration
+            });
+            return;
+          } catch (error) {
+            console.warn('[XRA CALIBRATION]', 'custom notice error', error);
+          }
+        }
+        if (typeof bubble?.message === 'function') {
+          try { bubble.message(0, message, duration, bubbleParams); }
+          catch (error) { console.warn('[XRA CALIBRATION]', 'native notice error', error); }
+        }
+      }
+
+      function showStatus(ready) {
+        const mode = String(XRA.config?.performance?.tracking_pipeline || '').toUpperCase() === 'FACE'
+          ? 'Face'
+          : 'Face+Body';
+        const initializing = translate(
+          'XR_Animator.UI.streamer_mode.mocap_initializing',
+          'Mocap initializing'
+        );
+        if (!ready) {
+          publishNotice(0, `${initializing} (${mode})...`, 10000);
+          return;
+        }
+        const webcamOn = translate('XR_Animator.UI.streamer_mode.webcam_on', 'Webcam: ON');
+        const modelLoaded = translate('XR_Animator.UI.streamer_mode.mocap_model_loaded', 'Mocap model: LOADED');
+        const calibrating = translate('XR_Animator.UI.streamer_mode.face_data_calibrating', 'Face data calibrating');
+        const camera = devLabel || XRA.config?.devices?.camera_label || 'Webcam';
+        publishNotice(0, `✅${webcamOn} (${camera})\n✅${modelLoaded}\n✅${calibrating}...`, 10000);
+        if (autoDismissTimer) clearTimeout(autoDismissTimer);
+        autoDismissTimer = setTimeout(() => {
+          try {
+            nativeBubble(0)?.hide?.();
+            XRA.uiCore?.hideNativeNotice?.('native-speech-0');
+          } catch (e) {}
+        }, 10000);
+      }
+
+      function showProgress(rawPercent) {
+        if (cleanupDone) return;
+        const percent = Math.max(0, Math.min(100, Math.round(Number(rawPercent) || 0)));
+        const title = translate(
+          'XR_Animator.UI.streamer_mode.calibrating_face_data',
+          'Calibrating face data'
+        );
+        const instruction = translate(
+          'XR_Animator.UI.streamer_mode.face_data_calibrating_message',
+          'Sit back, look straight and keep a calm face for a few seconds while the calibration is in process.'
+        );
+        const message = `(${title} - ${percent}%)`
+          + (percent < 100 ? `\n${instruction}` : '');
+        publishNotice(1, message, percent >= 100 ? 2000 : 15000);
+      }
+
+      function cleanup({ hide = false } = {}) {
+        if (cleanupDone) return;
+        cleanupDone = true;
+        if (autoDismissTimer) {
+          clearTimeout(autoDismissTimer);
+          autoDismissTimer = null;
+        }
+        window.removeEventListener('SA_camera_facemesh_calibrating', onCalibration);
+        if (hide) {
+          for (const index of [0, 1]) {
+            try { nativeBubble(index)?.hide?.(); } catch (e) {}
+            XRA.uiCore?.hideNativeNotice?.(`native-speech-${index}`);
+          }
+        }
+        activeCalSession = null;
+        bridge.__activeCalSession = null;
+      }
+
+      function onCalibration(event) {
+        if (cleanupDone) return;
+        const percent = Number(event?.detail?.percent);
+        if (!Number.isFinite(percent)) return;
+        showProgress(percent);
+        if (percent >= 100) {
+          setTimeout(() => {
+            cleanup({ hide: true });
+            bridge.dismissCalibrationNotices?.();
+          }, 2000);
+        }
+      }
+
+      const session = {
+        onBackendReady() {
+          if (cleanupDone) return;
+          const cam = window.System?._browser?.camera;
+          try {
+            if (cam) {
+              cam._image = cam.video;
+              if (cam.video) {
+                Object.defineProperty(cam.video, 'paused', {
+                  configurable: true,
+                  get: () => false
+                });
+              }
+            }
+          } catch (e) {}
+          try {
+            if (cam?.facemesh) cam.facemesh.data_detected = 0;
+            cam?.facemesh?.reset_calibration?.(true);
+            window.MMD_SA?.WebXR?.user_camera?.facemesh?.reset_calibration?.(true);
+          } catch (error) {
+            console.warn('[XRA CALIBRATION]', 'reset_calibration error', error);
+          }
+          showStatus(true);
+          showProgress(0);
+        },
+        isComplete: () => cleanupDone,
+        abort: () => cleanup({ hide: true })
+      };
+
+      activeCalSession = session;
+      bridge.__activeCalSession = session;
+      window.addEventListener('SA_camera_facemesh_calibrating', onCalibration);
+      showStatus(false);
+      return session;
+    }
+
+    bridge.startFaceCalibration = function () {
+      try { activeCalSession?.abort?.(); } catch (e) {}
+      return runExternalStartupCalibration(XRA.config?.devices?.camera_label || '');
+    };
+
+    let startingNativeStreamer = null;
+    bridge.startNativeStreamer = function (...args) {
+      if (!external()) return original.startNativeStreamer?.apply(this, args);
+      if (startingNativeStreamer) return startingNativeStreamer;
+      startingNativeStreamer = (async () => {
+        try {
+          const cam = window.System?._browser?.camera;
+          if (cam) {
+            setCamPropertySafe(cam, 'ML_enabled', true);
+            setCamPropertySafe(cam, 'mocap_enabled', true);
+            setCamPropertySafe(cam, 'running', true);
+            if (cam.streamer_mode) setCamPropertySafe(cam.streamer_mode, 'running', true);
+            if (cam.poseNet) {
+              cam.poseNet.enabled = true;
+              cam.poseNet.update_frame = () => {};
+            }
+            if (cam.facemesh) {
+              if (!cam.facemesh.initialized && typeof cam.facemesh.init === 'function') {
+                try { await cam.facemesh.init(); } catch (e) {}
+              }
+              cam.facemesh.enabled = true;
+              cam.facemesh.update_frame = () => {};
+            }
+          }
+          ensureExternalTrackingActive();
+          const cfg = XRA?.config || XRA?.profile?.custom || config;
+          const rawDevId = String(cfg?.devices?.camera_device_id ?? '');
+          const devIndex = deviceIndex.has(rawDevId)
+            ? deviceIndex.get(rawDevId)
+            : (Number.isFinite(Number.parseInt(rawDevId, 10)) ? Number.parseInt(rawDevId, 10) : 0);
+          const selfieMode = !!cfg?.devices?.selfie_mode;
+          const captureFps = Number(cfg?.performance?.pose_fps) || 30;
+
+          if (activeCalSession) {
+            try { activeCalSession.abort(); } catch (e) {}
+            activeCalSession = null;
+            bridge.__activeCalSession = null;
+          }
+          try {
+            activeCalSession = runExternalStartupCalibration(cfg?.devices?.camera_label || '');
+          } catch (e) {
+            console.warn('[XRA]', 'calibration session error', e);
+          }
+
+          const inferMode = cfg?.performance?.infer_mode || 'native';
+          let inferW = null, inferH = null;
+          if (inferMode !== 'native') {
+            const [w, h] = inferMode.split('x').map(Number);
+            if (w > 0 && h > 0) { inferW = w; inferH = h; }
+          }
+          await api().configure({
+            width: Number(cfg?.camera?.width) || 640,
+            height: Number(cfg?.camera?.height) || 480,
+            fps: captureFps,
+            selfie_mode: selfieMode,
+            mocap_mode: String(cfg?.performance?.tracking_pipeline || '').toUpperCase() === 'FACE' ? 'face' : 'holistic',
+            infer_mode: inferMode,
+            infer_width: inferW,
+            infer_height: inferH
+          });
+          await api().start({ index: devIndex });
+          ensureExternalTrackingActive();
+          try { activeCalSession?.onBackendReady?.(); } catch (e) {}
+          XRA.events?.emit?.('camera-started', externalActiveCamera());
+          return externalActiveCamera();
+        } catch (error) {
+          try { activeCalSession?.abort?.(); } catch (e) {}
+          activeCalSession = null;
+          bridge.__activeCalSession = null;
+          try { await api()?.stop?.(); } catch (e) {}
+          ensureExternalTrackingStopped();
+          XRA.events?.emit?.('camera-start-error', error);
+          throw error;
+        }
+      })();
+      return startingNativeStreamer.finally(() => {
+        startingNativeStreamer = null;
+      });
+    };
+    const isPythonCameraRunning = () => {
+      const status = capture();
+      return !!status.running && !status.paused;
+    };
+    bridge.restartNativeStreamer = async function (...args) {
+      if (external() || isPythonCameraRunning()) {
+        await bridge.stopNativeStreamer();
+        await new Promise(resolve => setTimeout(resolve, 100));
+        return bridge.startNativeStreamer();
+      }
+      return original.restartNativeStreamer?.apply(this, args);
+    };
+    bridge.stopNativeStreamer = async function (...args) {
+      if (external() || isPythonCameraRunning()) {
+        if (activeCalSession) {
+          activeCalSession.abort();
+          activeCalSession = null;
+        }
+        bridge.__activeCalSession = null;
+        try { await api().stop(); } catch (e) { console.warn(TAG, 'api.stop', e); }
+        ensureExternalTrackingStopped();
+        XRA.events?.emit?.('camera-stopped', { backend: 'python' });
+        return true;
+      }
+      return original.stopNativeStreamer?.apply(this, args);
+    };
+    bridge.enumerateCameras = async function (options = {}) {
+      if (!external()) return original.enumerateCameras?.call(this, options) || [];
+      // enumerateDevices does not acquire the camera. Never run the legacy
+      // permission probe (getUserMedia) while Python owns /dev/video*.
+      const devices = await navigator.mediaDevices?.enumerateDevices?.() || [];
+      const cameras = devices.filter(device => device.kind === 'videoinput');
+      deviceIndex.clear();
+      return cameras.map((device, index) => {
+        deviceIndex.set(device.deviceId, index);
+        return {
+          deviceId: device.deviceId || String(index),
+          groupId: device.groupId || '',
+          label: device.label || `Camera ${index + 1}`,
+          index,
+        };
+      });
+    };
+    async function configurePreference({ deviceId = '', label = '' } = {}, startAfter = false) {
+      const fallback = Number.parseInt(String(deviceId), 10);
+      const index = deviceIndex.has(deviceId)
+        ? deviceIndex.get(deviceId)
+        : (Number.isFinite(fallback) ? fallback : 0);
+      XRA.config.devices ||= {};
+      XRA.config.devices.camera_device_id = deviceId || String(index);
+      XRA.config.devices.camera_label = label || `Camera ${index + 1}`;
+      await XRA.profileService?.save?.(0);
+      await api().configure({ index });
+      if (startAfter) await api().start({ index });
+      return externalActiveCamera();
+    }
+    bridge.setCameraPreference = async function (preference = {}) {
+      return external()
+        ? configurePreference(preference, false)
+        : original.setCameraPreference?.call(this, preference);
+    };
+    bridge.switchCamera = async function (preference = {}) {
+      return external()
+        ? configurePreference(preference, true)
+        : original.switchCamera?.call(this, preference);
+    };
+    bridge.applyCameraConstraintsSafe = async function (constraints, options = {}) {
+      if (!external()) return original.applyCameraConstraintsSafe?.call(this, constraints, options);
+      // Browser-stream constraints (often 1920x1080/60) are unrelated to the
+      // Python capture path. Forwarding them silently overrode the lightweight
+      // 384x216/20 backend configuration and saturated the CPU.
+      return true;
+    };
+    bridge.ensureCameraHealthy = async function (options = {}) {
+      if (!external()) return original.ensureCameraHealthy?.call(this, options);
+      const status = capture();
+      return !!status.running && !status.paused
+        && status.camera_open === true && status.available === true;
+    };
+    bridge.cameraHealth = function (...args) {
+      if (!external()) return original.cameraHealth?.apply(this, args);
+      const status = capture();
+      const live = !!status.running && !status.paused
+        && status.camera_open === true && status.available === true;
+      return {
+        healthy: live,
+        live,
+        muted: false,
+        backend: 'python',
+        error: status.last_error || '',
+      };
+    };
+    Object.defineProperty(bridge, '__xraBackendRouteV5', { value: true });
+  }
+
+  install();
+})();

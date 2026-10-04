@@ -253,7 +253,9 @@ if (self.MMD_SA && !MMD_SA_options.MMD_disabled) {
     let motion_index = (MMD_SA_options.motion_shuffle || MMD_SA_options._motion_shuffle_list_default) ? MMD_SA_options.motion_shuffle_list[MMD_SA.motion_shuffle_index] : 0
     let motion = MMD_SA_options.motion[motion_index]
 
-    window.dispatchEvent(new CustomEvent("SA_MMD_model0_onmotionchange", { detail:{ motion_old:mm_old, motion_new:mmd.motionManager } }));
+    if (motion_changed) {
+      window.dispatchEvent(new CustomEvent("SA_MMD_model0_onmotionchange", { detail:{ motion_old:mm_old, motion_new:mmd.motionManager } }));
+    }
 
     if (MMD_SA._force_motion_shuffle)
       adjust_center_view = true
@@ -310,10 +312,11 @@ para_SA.motion_blending = {
       model.camera = obj.camera
       THREE.MMD.setupCameraMotion(model.camera)
 
-      model.resetMotion((mm.para_SA.initial_physics_reset != null) ? !mm.para_SA.initial_physics_reset : MMD_SA._ignore_physics_reset)
-
+      let ignore_bones_reset_on_change = !!(mm.para_SA?.motion_tracking_enabled || (self.System?._browser?.camera?.ML_enabled));
+      model.resetMotion((mm.para_SA.initial_physics_reset != null) ? !mm.para_SA.initial_physics_reset : MMD_SA._ignore_physics_reset, ignore_bones_reset_on_change)
       MMD_SA.reset_skin(0)
       MMD_SA.reset_morph(0)
+
       THREE.MMD.adjustMotionDuration()
 
       MMD_SA_options.model_para_obj.onMotionChange && MMD_SA_options.model_para_obj.onMotionChange();
@@ -324,7 +327,8 @@ para_SA.motion_blending = {
     }
     else {
       let ignore_physics_reset = ((mm.para_SA.loopback_physics_reset == false) || ((mm.lastFrame_ == mm.lastFrame) && !mm.firstFrame_ && !mm.para_SA.loopback_fading))
-      model.resetMotion(ignore_physics_reset || MMD_SA._ignore_physics_reset)
+      let ignore_bones_reset = !!(mm.para_SA?.motion_tracking_enabled || (self.System?._browser?.camera?.ML_enabled) || mm.para_SA?.loop_on_blending || !motion_changed);
+      model.resetMotion(ignore_physics_reset || MMD_SA._ignore_physics_reset, ignore_bones_reset)
     }
 //DEBUG_show(motion.path.replace(/^.+[\/\\]/, "")+"/"+mmd.motionManager.filename+'/'+(MMD_SA_options.motion[model.skin._motion_index].path.replace(/^.+[\/\\]/, ""))+'/'+parseInt(mm.lastFrame_/30)+'/'+Date.now())
 
@@ -445,7 +449,8 @@ MMD_SA.fadeout_opacity = 0.95;
       if (!model_para.mirror_motion_from_first_model)
         mm0 = mm
 
-      _model.resetMotion((mm.para_SA.initial_physics_reset != null) ? !mm.para_SA.initial_physics_reset : MMD_SA._ignore_physics_reset)
+      let ignore_bones_reset_on_change = !!(mm.para_SA?.motion_tracking_enabled || (self.System?._browser?.camera?.ML_enabled));
+      _model.resetMotion((mm.para_SA.initial_physics_reset != null) ? !mm.para_SA.initial_physics_reset : MMD_SA._ignore_physics_reset, ignore_bones_reset_on_change)
 
       MMD_SA.reset_skin(i)
       MMD_SA.reset_morph(i)
@@ -462,7 +467,8 @@ MMD_SA.fadeout_opacity = 0.95;
     }
     else {
       var ignore_physics_reset = _model.skin.time && ((mm.para_SA.loopback_physics_reset == false) || ((lastFrame == mm.lastFrame) && !(model_para._firstFrame_||mm.firstFrame_) && !mm.para_SA.loopback_fading))
-      _model.resetMotion(ignore_physics_reset || MMD_SA._ignore_physics_reset)
+      var ignore_bones_reset = !!(mm.para_SA?.motion_tracking_enabled || (self.System?._browser?.camera?.ML_enabled) || mm.para_SA?.loop_on_blending || !motion_changed);
+      _model.resetMotion(ignore_physics_reset || MMD_SA._ignore_physics_reset, ignore_bones_reset)
     }
 
     _model.skin._loop_timestamp = RAF_timestamp
@@ -6462,8 +6468,8 @@ Model.prototype.setupMotion_MMD_SA = function( vmd, match, use_dummy ) {
 Model.prototype._VMD = function (url, onload) { (new VMD()).load(url, onload) };
 
 // AT: Ignore physics reset, mainly for looping motion
-Model.prototype.resetMotion = function(ignore_physics_reset) {
-	this.resetBones();
+Model.prototype.resetMotion = function(ignore_physics_reset, ignore_bones_reset) {
+	if (!ignore_bones_reset) this.resetBones();
 	if ( this.morph ) {
 		this.morph.reset();
 // AT: System Animator

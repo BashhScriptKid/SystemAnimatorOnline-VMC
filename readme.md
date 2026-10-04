@@ -48,6 +48,9 @@ The strategy is therefore deliberate:
 ## Status
 Early, work in progress. Interfaces and behavior may change.
 
+## Credits & derived work
+This fork **absorbs once** work from the **XR Animator — Podcasters Edition** fork by **thatisjigen** ([repo](https://github.com/Thatisjigen/XR_Animator_Podcasters)), under the same CC BY-NC-SA 4.0 license. That includes, among others: a **native Python MediaPipe backend** (`xra_backends/`, `xr_server.py`, `xr_launcher.py`), the **WebSocket inference bridge** (`js/xra_backend_bridge.js`), Linux/Wayland and OBS improvements, and studio features (3D props, stages, audio, recorder, control panel). Authorship of those parts belongs to that fork — see its repository. Upstream **XR Animator** by **Butz Yung** remains the foundation, and all upstream license/credits below still apply.
+
 # Features
 
 - Support full-body AI motion tracking using a single webcam or media file (image/video)

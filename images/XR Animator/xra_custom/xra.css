@@ -1,0 +1,1533 @@
+:root {
+  --xra-bg: rgba(17, 17, 18, .92);
+  --xra-bg-solid: #151516;
+  --xra-bg-2: rgba(29, 29, 31, .96);
+  --xra-panel-border: rgba(255,255,255,.14);
+  --xra-row-border: rgba(255,255,255,.08);
+  --xra-text: #f5f5f6;
+  --xra-muted: rgba(255,255,255,.60);
+  --xra-control: #272729;
+  --xra-control-border: rgba(255,255,255,.22);
+  --xra-radius: 10px;
+  --xra-right-width: 420px;
+  --xra-left-width: 420px;
+}
+
+/* Never let browser/native CSS change our box math. */
+#XRA_CUSTOM_PANEL,
+#XRA_CUSTOM_PANEL *,
+#XRA_NATIVE_SETTINGS,
+#XRA_NATIVE_SETTINGS *,
+.xra-overlay,
+.xra-overlay * {
+  box-sizing: border-box;
+}
+
+[hidden] { display: none !important; }
+
+/* Eco mode stops the render loop. Hide the retained WebGL frame as well, so
+   the paused scene cannot be mistaken for a frozen application. */
+html.xra-eco-mode #SLX,
+html.xra-eco-mode #SL {
+  visibility: hidden !important;
+  opacity: 0 !important;
+}
+
+.xra-eco-curtain {
+  position: fixed;
+  inset: 0;
+  z-index: 9000;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background:
+    radial-gradient(circle at 50% 42%, rgba(30, 80, 64, .22), transparent 38%),
+    #080b0d;
+  color: #f5f7f6;
+  pointer-events: none;
+}
+
+.xra-eco-curtain-card {
+  display: grid;
+  justify-items: center;
+  gap: 8px;
+  width: min(430px, calc(100vw - 48px));
+  padding: 22px 26px;
+  border: 1px solid rgba(110, 231, 183, .28);
+  border-radius: 14px;
+  background: rgba(11, 22, 20, .94);
+  box-shadow: 0 18px 55px rgba(0, 0, 0, .52);
+  text-align: center;
+  font: 13px/1.45 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.xra-eco-curtain-icon { font-size: 28px; line-height: 1; }
+.xra-eco-curtain-card strong { font-size: 16px; }
+.xra-eco-curtain-card span { color: rgba(255, 255, 255, .72); }
+
+/* The mocap preview is an independent 2D canvas: keep it over the WebGL
+   scene so enabling the 3D renderer cannot bury the diagnostic wireframe. */
+#XRA_MOCAP_WIREFRAME_LAYER {
+  position: fixed;
+  inset: 0;
+  z-index: 900000;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.xra-mocap-wireframe-front {
+  position: absolute !important;
+  z-index: 1 !important;
+  pointer-events: none !important;
+}
+
+/* The native canvas exists before its first mocap packet supplies the final
+   dimensions and offsets. Keep its default 300x150 position from flashing in
+   the top-left corner while that first layout is still pending. */
+.xra-mocap-wireframe-front.xra-mocap-wireframe-pending {
+  visibility: hidden !important;
+}
+
+/* ============================================================
+   RIGHT — custom controls. Header is intentionally transparent:
+   no black rectangle behind HANDS / hide button.
+   ============================================================ */
+#XRA_CUSTOM_PANEL.xra-right-panel {
+  position: fixed;
+  top: 10px;
+  right: 0;
+  z-index: 999999;
+  width: min(var(--xra-right-width), calc(100vw - 20px));
+  color: var(--xra-text);
+  font: 12px/1.35 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  pointer-events: auto;
+  background: transparent;
+  transition: width .15s ease;
+}
+
+#XRA_CUSTOM_PANEL.xra-right-panel.panel-closed {
+  width: 236px;
+  right: 0;
+  top: 10px;
+}
+
+.xra-right-header {
+  display: flex;
+  align-items: stretch;
+  justify-content: flex-start;
+  gap: 6px;
+  width: 100%;
+  height: 36px;
+  margin: 0 0 4px;
+  padding: 0;
+  box-sizing: border-box;
+  background: transparent !important;
+  border: 0;
+  box-shadow: none;
+  transition: width .15s ease;
+}
+
+.panel-closed .xra-right-header {
+  width: 100%;
+  margin: 0 0 4px;
+  padding: 0;
+  gap: 6px;
+  justify-content: flex-start;
+}
+
+.xra-hands,
+.xra-hide,
+.xra-total-hide,
+.xra-fullscreen-toggle {
+  height: 36px;
+  min-height: 36px;
+  border: 0;
+  border-radius: 9px;
+  color: #fff;
+  font-weight: 800;
+  cursor: pointer;
+  box-shadow: 0 2px 5px rgba(0,0,0,.28);
+  transition: background .15s ease, opacity .15s ease;
+}
+
+.xra-fullscreen-toggle {
+  background: rgba(36, 42, 38, .92);
+  flex: 1 1 36px;
+  min-width: 32px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 15px;
+}
+.xra-fullscreen-toggle:hover {
+  background: rgba(50, 60, 54, .98);
+  color: var(--xra-mint);
+}
+
+#LbuttonTL {
+  display: none !important;
+}
+
+.xra-hands {
+  flex: 1.5 1 76px;
+  min-width: 60px;
+  padding: 7px 4px;
+  font-size: 11px;
+  white-space: nowrap;
+  background: rgba(20,130,70,.94);
+  text-align: center;
+}
+.xra-hands.off { background: rgba(150,40,40,.94); }
+
+.xra-hide {
+  flex: 1 1 36px;
+  min-width: 32px;
+  padding: 0;
+  background: rgba(55,55,58,.96);
+  font-size: 16px;
+}
+.xra-hide:hover {
+  background: rgba(75,75,80,.98);
+}
+
+.xra-total-hide {
+  flex: 1 1 36px;
+  min-width: 32px;
+  padding: 0;
+  background: rgba(45,45,48,.96);
+  font-size: 16px;
+}
+.xra-total-hide:hover {
+  background: rgba(65,65,70,.98);
+}
+
+.xra-right-launcher {
+  position: static;
+  width: 236px;
+  min-width: 236px;
+  max-width: 236px;
+  min-height: 108px;
+  height: 108px;
+  padding: 12px 14px;
+  border: 1px solid var(--xra-panel-border);
+  border-right: 0;
+  border-radius: 12px 0 0 12px;
+  background: rgba(24,24,26,.94);
+  color: #fff;
+  cursor: pointer;
+  font-weight: 800;
+  font-size: 11px;
+  letter-spacing: .05em;
+  text-transform: uppercase;
+  pointer-events: auto;
+  box-shadow: 0 5px 20px rgba(0,0,0,.30);
+  transition: background .15s ease, border-color .15s ease;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  box-sizing: border-box;
+  text-align: center;
+}
+.xra-right-launcher:hover {
+  background: var(--xra-bg-2);
+  border-color: rgba(255,255,255,.25);
+}
+
+.panel-closed .xra-right-launcher {
+  width: 236px;
+  min-width: 236px;
+  max-width: 236px;
+  min-height: 108px;
+  height: 108px;
+  border-radius: 12px 0 0 12px;
+  border-right: 0;
+}
+
+
+.xra-right-body {
+  max-height: calc(100vh - 64px);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  border: 1px solid var(--xra-panel-border);
+  border-right: 0;
+  border-radius: 12px 0 0 12px;
+  background: var(--xra-bg);
+  box-shadow: 0 8px 30px rgba(0,0,0,.38);
+  backdrop-filter: blur(7px);
+}
+
+.xra-menu-top {
+  flex: 0 0 40px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0 10px;
+  margin: 0;
+  border-bottom: 1px solid var(--xra-row-border);
+  background: rgba(255,255,255,.035);
+}
+
+.xra-menu-title {
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  color: var(--xra-muted);
+  text-transform: uppercase;
+}
+
+.xra-menu-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: rgba(255,255,255,.08);
+  color: #fff;
+  font-size: 16px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background .15s ease, color .15s ease;
+}
+.xra-menu-close:hover {
+  background: rgba(255,255,255,.18);
+  color: #fff;
+}
+
+.xra-right-content {
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.22) rgba(0, 0, 0, 0.18);
+  padding: 7px;
+}
+
+/* Sleek dark scrollbar */
+.xra-right-content::-webkit-scrollbar,
+.xra-native-content::-webkit-scrollbar,
+#XRA_CUSTOM_PANEL *::-webkit-scrollbar,
+.xra-native-root *::-webkit-scrollbar,
+#Ldebug::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.xra-right-content::-webkit-scrollbar-track,
+.xra-native-content::-webkit-scrollbar-track,
+#XRA_CUSTOM_PANEL *::-webkit-scrollbar-track,
+.xra-native-root *::-webkit-scrollbar-track,
+#Ldebug::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.18);
+  border-radius: 999px;
+  margin: 3px 0;
+}
+
+.xra-right-content::-webkit-scrollbar-thumb,
+.xra-native-content::-webkit-scrollbar-thumb,
+#XRA_CUSTOM_PANEL *::-webkit-scrollbar-thumb,
+.xra-native-root *::-webkit-scrollbar-thumb,
+#Ldebug::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.22);
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.xra-right-content::-webkit-scrollbar-thumb:hover,
+.xra-native-content::-webkit-scrollbar-thumb:hover,
+#XRA_CUSTOM_PANEL *::-webkit-scrollbar-thumb:hover,
+.xra-native-root *::-webkit-scrollbar-thumb:hover,
+#Ldebug::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.38);
+}
+
+.xra-right-content::-webkit-scrollbar-thumb:active,
+.xra-native-content::-webkit-scrollbar-thumb:active,
+#XRA_CUSTOM_PANEL *::-webkit-scrollbar-thumb:active,
+.xra-native-root *::-webkit-scrollbar-thumb:active,
+#Ldebug::-webkit-scrollbar-thumb:active {
+  background: rgba(120, 190, 155, 0.8);
+}
+
+.xra-right-content::-webkit-scrollbar-button,
+.xra-native-content::-webkit-scrollbar-button,
+#XRA_CUSTOM_PANEL *::-webkit-scrollbar-button,
+.xra-native-root *::-webkit-scrollbar-button,
+#Ldebug::-webkit-scrollbar-button {
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
+}
+
+.xra-right-content::-webkit-scrollbar-corner,
+.xra-native-content::-webkit-scrollbar-corner,
+#XRA_CUSTOM_PANEL *::-webkit-scrollbar-corner,
+.xra-native-root *::-webkit-scrollbar-corner,
+#Ldebug::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* ============================================================
+   Shared controls / accordion
+   ============================================================ */
+.xra-details {
+  margin: 0 0 6px;
+  border: 1px solid var(--xra-row-border);
+  border-radius: 8px;
+  background: rgba(255,255,255,.028);
+  overflow: clip;
+}
+
+.xra-details > summary {
+  list-style: none;
+  cursor: pointer;
+  user-select: none;
+  padding: 8px 9px;
+  font-weight: 800;
+  color: var(--xra-text);
+  background: rgba(255,255,255,.025);
+}
+.xra-details > summary::-webkit-details-marker { display: none; }
+.xra-details > summary::before {
+  content: '›';
+  display: inline-block;
+  width: 13px;
+  opacity: .72;
+  transform-origin: 45% 50%;
+  transition: transform .12s ease;
+}
+.xra-details[open] > summary::before { transform: rotate(90deg); }
+.xra-details[open] > summary { border-bottom: 1px solid var(--xra-row-border); }
+
+.xra-details-body { padding: 6px 8px 8px; }
+
+.xra-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 160px 26px;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  margin: 5px 0;
+}
+.xra-row.no-reset {
+  grid-template-columns: minmax(0, 1fr) 160px 26px;
+}
+.xra-row.no-reset > .xra-action,
+.xra-row.no-reset > .xra-actions,
+.xra-row.no-reset > .xra-stack-control {
+  grid-column: 2 / 4;
+}
+.xra-row-label { min-width: 0; }
+.xra-label { color: var(--xra-text); overflow-wrap: anywhere; }
+.xra-sub { color: var(--xra-muted); font-size: 10px; line-height: 1.35; margin-top: 2px; }
+.xra-note {
+  color: var(--xra-muted);
+  font-size: 10px;
+  line-height: 1.45;
+  padding: 6px 7px;
+  margin: 4px 0 7px;
+  border-radius: 6px;
+  background: rgba(255,255,255,.035);
+}
+
+.xra-control,
+.xra-row select,
+.xra-row input[type="text"],
+.xra-row input[type="number"] {
+  min-width: 0;
+  width: 100%;
+  max-width: 100%;
+  padding: 5px 6px;
+  color: #fff;
+  background: var(--xra-control);
+  border: 1px solid var(--xra-control-border);
+  border-radius: 6px;
+  font: inherit;
+}
+
+.xra-row input[type="checkbox"] {
+  justify-self: end;
+  width: 17px;
+  height: 17px;
+  accent-color: #4fa879;
+  cursor: pointer;
+}
+.xra-row input[type="range"] { min-width: 0; width: 100%; accent-color: #6cab89; }
+.xra-row input[type="color"] {
+  width: 48px;
+  height: 29px;
+  padding: 1px;
+  background: var(--xra-control);
+  border: 1px solid var(--xra-control-border);
+  border-radius: 6px;
+}
+
+.xra-stack-control {
+  min-width: 0;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  text-align: right;
+}
+.xra-stack-control > input[type="range"],
+.xra-stack-control > input[type="text"],
+.xra-stack-control > select,
+.xra-stack-control > button,
+.xra-stack-control > .xra-control,
+.xra-stack-control > .xra-meter {
+  display: block;
+  width: 100%;
+}
+.xra-stack-control > input[type="checkbox"] {
+  width: 17px;
+  height: 17px;
+  accent-color: #4fa879;
+  cursor: pointer;
+  align-self: flex-end;
+  margin: 0;
+}
+
+.xra-reset {
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid rgba(255,255,255,.18);
+  border-radius: 6px;
+  background: #303033;
+  color: #fff;
+  cursor: pointer;
+  font-weight: 900;
+  line-height: 1;
+}
+.xra-reset:disabled { opacity: .20; cursor: default; }
+
+.xra-action {
+  width: 100%;
+  margin: 4px 0;
+  padding: 7px 8px;
+  border: 0;
+  border-radius: 7px;
+  background: #3b3b3e;
+  color: #fff;
+  cursor: pointer;
+  font: inherit;
+}
+.xra-action:hover { filter: brightness(1.11); }
+.xra-action.primary { background: #28634c; font-weight: 800; }
+.xra-action.danger { background: #7b3030; }
+.xra-action.active-warm { background: #735d29; }
+
+.xra-actions { display: flex; gap: 6px; margin-top: 4px; width: 100%; }
+.xra-actions > * {
+  flex: 1 1 0;
+  min-width: 0;
+  font-size: 11px;
+  padding: 6px 6px;
+  text-align: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: normal;
+  line-height: 1.25;
+}
+.xra-stack-control .xra-actions {
+  flex-direction: column;
+  gap: 5px;
+}
+.xra-stack-control .xra-actions > * {
+  flex: 0 0 auto;
+  width: 100%;
+  min-height: 28px;
+  box-sizing: border-box;
+  overflow: visible;
+  padding: 6px 8px;
+}
+
+.xra-status {
+  margin: 5px 0;
+  padding: 6px 7px;
+  border-radius: 6px;
+  background: rgba(0,0,0,.22);
+  color: var(--xra-muted);
+  font: 10px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.xra-meter {
+  position: relative;
+  height: 11px;
+  margin: 6px 0 4px;
+  overflow: hidden;
+  border: 1px solid rgba(255,255,255,.26);
+  border-radius: 5px;
+  background: #111;
+}
+.xra-meter-fill { height: 100%; width: 0; background: rgba(255,255,255,.56); }
+.xra-meter-gate { position: absolute; top: 0; bottom: 0; width: 2px; left: 20%; background: #fff; }
+
+/* ============================================================
+   LEFT — native XR SETTINGS. It is a drawer, not a second copy of
+   the custom right controls.
+   ============================================================ */
+#XRA_NATIVE_SETTINGS.xra-native-root {
+  position: fixed;
+  left: 0;
+  top: 10px;
+  bottom: 12px;
+  z-index: 999998;
+  pointer-events: none;
+  color: var(--xra-text);
+  font: 12px/1.35 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.xra-left-header {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 236px;
+  height: 36px;
+  margin: 0 0 4px;
+  padding: 0;
+  box-sizing: border-box;
+  display: flex;
+  align-items: stretch;
+  justify-content: flex-start;
+  gap: 6px;
+  pointer-events: auto;
+}
+
+.xra-app-quit {
+  height: 36px;
+  min-height: 36px;
+  padding: 0 16px;
+  border: 0;
+  border-radius: 9px;
+  background: rgba(36, 42, 38, .92);
+  color: #fff;
+  font-weight: 800;
+  font-size: 11px;
+  letter-spacing: .05em;
+  cursor: pointer;
+  box-shadow: 0 2px 5px rgba(0,0,0,.28);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  transition: background .15s ease, opacity .15s ease;
+}
+.xra-app-quit:hover {
+  background: rgba(175, 45, 45, .94);
+  color: #fff;
+}
+
+.xra-native-launcher {
+  position: absolute;
+  left: 0;
+  top: 40px;
+  width: 236px;
+  min-width: 236px;
+  max-width: 236px;
+  min-height: 108px;
+  height: 108px;
+  padding: 12px 14px;
+  border: 1px solid var(--xra-panel-border);
+  border-left: 0;
+  border-radius: 0 12px 12px 0;
+  background: rgba(24,24,26,.94);
+  color: #fff;
+  cursor: pointer;
+  font-weight: 800;
+  font-size: 11px;
+  letter-spacing: .05em;
+  text-transform: uppercase;
+  pointer-events: auto;
+  box-shadow: 0 5px 20px rgba(0,0,0,.30);
+  transition: transform .16s ease, background .15s ease;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  box-sizing: border-box;
+  text-align: center;
+}
+.xra-native-launcher:hover {
+  background: var(--xra-bg-2);
+  border-color: rgba(255,255,255,.25);
+}
+
+.xra-native-drawer {
+  position: absolute;
+  top: 40px;
+  left: 0;
+  width: min(var(--xra-left-width), calc(100vw - 20px));
+  max-height: calc(100vh - 64px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--xra-panel-border);
+  border-left: 0;
+  border-radius: 0 11px 11px 0;
+  background: var(--xra-bg);
+  box-shadow: 0 9px 32px rgba(0,0,0,.44);
+  backdrop-filter: blur(8px);
+  transform: translateX(calc(-100% - 8px));
+  opacity: 0;
+  pointer-events: none;
+  transition: transform .16s ease, opacity .16s ease;
+}
+
+.xra-native-root.open .xra-native-drawer {
+  transform: translateX(0);
+  opacity: 1;
+  pointer-events: auto;
+}
+.xra-native-root.open .xra-native-launcher {
+  display: none !important;
+}
+
+.xra-native-header {
+  flex: 0 0 40px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0 10px;
+  margin: 0;
+  border-bottom: 1px solid var(--xra-panel-border);
+  background: rgba(255,255,255,.035);
+}
+.xra-native-title {
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: .05em;
+  color: var(--xra-muted);
+  text-transform: uppercase;
+}
+.xra-native-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: rgba(255,255,255,.08);
+  color: #fff;
+  font-size: 16px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background .15s ease;
+}
+.xra-native-close:hover {
+  background: rgba(255,255,255,.18);
+}
+
+.xra-native-search {
+  flex: 0 0 auto;
+  width: calc(100% - 16px);
+  margin: 8px;
+  padding: 7px 8px;
+  color: #fff;
+  background: #262628;
+  border: 1px solid var(--xra-control-border);
+  border-radius: 7px;
+  outline: none;
+}
+.xra-native-search:focus { border-color: rgba(120,190,155,.8); }
+
+.xra-native-content {
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.22) rgba(0, 0, 0, 0.18);
+  padding: 0 8px 8px;
+}
+
+.xra-native-content .xra-row,
+.xra-native-content .xra-row.no-reset {
+  grid-template-columns: minmax(0, 1fr) 160px 26px;
+}
+.xra-native-content .xra-row.no-reset > .xra-action,
+.xra-native-content .xra-row.no-reset > .xra-actions,
+.xra-native-content .xra-row.no-reset > .xra-stack-control {
+  grid-column: 2 / 4;
+}
+
+.xra-native-json {
+  width: 100%;
+  min-height: 220px;
+  resize: vertical;
+  padding: 8px;
+  color: #e9e9ea;
+  background: #111113;
+  border: 1px solid var(--xra-control-border);
+  border-radius: 7px;
+  font: 10px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+/* ============================================================
+   Startup / toast
+   ============================================================ */
+.xra-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000001;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0,0,0,.72);
+  color: #fff;
+  font-family: system-ui, sans-serif;
+}
+.xra-start-card {
+  position: relative;
+  width: min(470px, calc(100vw - 28px));
+  padding: 18px;
+  border: 1px solid var(--xra-panel-border);
+  border-radius: var(--xra-radius);
+  background: var(--xra-bg);
+  box-shadow: 0 14px 48px rgba(0,0,0,.65);
+  backdrop-filter: blur(10px);
+}
+.xra-start-card h2 { margin: 0; font-size: 20px; }
+.xra-start-card select {
+  width: 100%;
+  padding: 7px;
+  background: var(--xra-control);
+  color: var(--xra-text);
+  border: 1px solid var(--xra-control-border);
+  border-radius: 6px;
+}
+.xra-start-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
+.xra-start-close {
+  flex: 0 0 30px; width: 30px; height: 30px; padding: 0;
+  border: 1px solid var(--xra-control-border); border-radius: 7px;
+  background: var(--xra-control); color: var(--xra-text); cursor: pointer;
+  font: 700 18px/1 system-ui, sans-serif;
+}
+.xra-start-close:hover { filter: brightness(1.15); }
+.xra-start-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; }
+.xra-start-field { display: grid; gap: 4px; min-width: 0; color: var(--xra-muted); font-size: 10px; }
+.xra-start-camera {
+  margin: 11px 0 8px; padding: 10px;
+  border: 1px solid var(--xra-row-border); border-radius: 8px;
+  background: rgba(255,255,255,.025);
+}
+.xra-start-camera-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 7px; }
+.xra-start-camera-title { color: var(--xra-text); font-weight: 800; }
+.xra-start-camera-state { color: var(--xra-muted); font: 10px/1.3 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.xra-start-camera-state::before { content: ''; display: inline-block; width: 7px; height: 7px; margin-right: 5px; border-radius: 50%; background: #d95757; }
+.xra-start-camera-state.on::before { background: #59c985; }
+.xra-start-camera-row,
+.xra-start-camera-actions { display: grid; grid-template-columns: minmax(0,1fr) 38px; gap: 6px; }
+.xra-start-camera-row .xra-action,
+.xra-start-camera-actions .xra-action { margin: 0; }
+.xra-start-foot { display: flex; align-items: center; justify-content: stretch; gap: 10px; margin-top: 14px; }
+.xra-start-foot label { display: flex; gap: 7px; align-items: center; color: var(--xra-muted); font-size: 11px; }
+.xra-restart-dialog-overlay .xra-start-foot > .xra-action {
+  flex: 1 1 0;
+  width: 0;
+  min-width: 0;
+  min-height: 34px;
+  margin: 0;
+  box-sizing: border-box;
+}
+.xra-start-confirm { width: 100%; margin: 0; height: 38px; font-size: 13px; font-weight: 800; letter-spacing: 0.05em; }
+
+.xra-native-notice-host {
+  position: fixed;
+  top: 12px;
+  left: 50%;
+  z-index: 1000002;
+  width: min(480px, calc(100vw - 40px));
+  transform: translateX(-50%);
+  display: grid;
+  gap: 6px;
+  pointer-events: none;
+  color: var(--xra-text);
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+.xra-native-notice {
+  padding: 9px 11px;
+  border: 1px solid var(--xra-panel-border);
+  border-radius: 9px;
+  background: var(--xra-bg);
+  box-shadow: 0 8px 28px rgba(0,0,0,.42);
+  backdrop-filter: blur(8px);
+}
+.xra-native-notice-heading { display: flex; align-items: center; gap: 6px; margin-bottom: 5px; }
+.xra-native-notice-dot { width: 7px; height: 7px; border-radius: 50%; background: #59c985; }
+.xra-native-notice-title { color: var(--xra-muted); font: 800 9px/1.2 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; text-transform: uppercase; letter-spacing: .08em; }
+.xra-native-notice-message { white-space: pre-wrap; overflow-wrap: anywhere; font: 11px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.xra-native-notice.interactive { border-color: rgba(89,201,133,.42); pointer-events: auto; }
+.xra-native-notice-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.xra-native-notice-actions[hidden] { display: none; }
+.xra-native-notice-actions .xra-action { flex: 1 1 150px; margin: 0; text-align: left; }
+
+/* XR Animator writes boot, camera and mocap status into the legacy white
+   Ldebug strip. Keep the useful messages, but present them in our UI language. */
+#Ldebug {
+  display: none !important;
+  position: fixed !important;
+  top: 12px !important;
+  left: 50% !important;
+  right: auto !important;
+  width: min(720px, calc(100vw - 40px)) !important;
+  max-height: min(35vh, 240px) !important;
+  box-sizing: border-box !important;
+  padding: 8px 10px !important;
+  overflow: auto !important;
+  transform: translateX(-50%) !important;
+  transform-origin: center top !important;
+  border: 1px solid var(--xra-panel-border) !important;
+  border-radius: 9px !important;
+  background: var(--xra-bg) !important;
+  color: var(--xra-text) !important;
+  box-shadow: 0 8px 28px rgba(0,0,0,.42) !important;
+  font: 11px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace !important;
+  white-space: pre-wrap !important;
+  overflow-wrap: anywhere !important;
+  pointer-events: none !important;
+  z-index: 1000001 !important;
+}
+body.xra-native-debug-visible #Ldebug { display: block !important; }
+
+.xra-toast-host {
+  position: fixed;
+  right: 12px;
+  bottom: 12px;
+  z-index: 1000002;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  pointer-events: none;
+}
+.xra-toast {
+  max-width: 360px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgba(20,20,22,.96);
+  color: #fff;
+  box-shadow: 0 4px 18px rgba(0,0,0,.35);
+}
+.xra-toast.error { background: rgba(120,30,30,.97); }
+
+/* Hide native bottom/inventory UI together with the custom drawers. */
+body.xra-native-ui-hidden #Ldungeon_UI {
+  visibility: hidden !important;
+  pointer-events: none !important;
+}
+
+/* Total Clean Screen: hides all UI, headers, menus, launchers and overlays */
+body.xra-total-clean-screen #XRA_CUSTOM_PANEL,
+body.xra-total-clean-screen #XRA_NATIVE_SETTINGS,
+body.xra-total-clean-screen .xra-native-launcher,
+body.xra-total-clean-screen .xra-right-launcher,
+body.xra-total-clean-screen .xra-toast-host,
+body.xra-total-clean-screen .xra-native-notice-host,
+body.xra-total-clean-screen .xra-help-popup,
+body.xra-total-clean-screen #Ldungeon_UI {
+  display: none !important;
+  visibility: hidden !important;
+  pointer-events: none !important;
+}
+
+@media (max-width: 760px) {
+  :root { --xra-right-width: 270px; --xra-left-width: 330px; }
+  #XRA_CUSTOM_PANEL.xra-right-panel { right: 6px; top: 6px; }
+  #XRA_NATIVE_SETTINGS.xra-native-root { top: 6px; }
+  .xra-right-launcher { top: 48px; }
+  .xra-native-root.open .xra-native-launcher { display: none; }
+}
+
+@media (max-width: 520px) {
+  #XRA_CUSTOM_PANEL.xra-right-panel {
+    left: 6px;
+    right: 6px;
+    width: auto;
+  }
+  .xra-right-body { max-height: 72vh; }
+  #XRA_NATIVE_SETTINGS.xra-native-root { top: 6px; }
+  .xra-right-launcher { top: 48px; }
+  .xra-native-drawer { width: calc(100vw - 12px); }
+  .xra-row,
+  .xra-native-content .xra-row {
+    grid-template-columns: minmax(0,1fr) minmax(90px,116px) 26px;
+  }
+  .xra-start-grid { grid-template-columns: 1fr; }
+  .xra-native-notice-host { top: 56px; width: calc(100vw - 20px); }
+}
+
+.xra-command-wrap {
+  margin: 5px 0 7px;
+}
+.xra-command-wrap > .xra-action {
+  margin: 0;
+}
+.xra-command-wrap > .xra-sub {
+  margin: 3px 2px 0;
+}
+
+/* ============================================================
+   Hover help / performance impact
+   ============================================================ */
+.xra-help-popup {
+  position: fixed;
+  z-index: 1000005;
+  width: min(330px, calc(100vw - 24px));
+  padding: 10px 11px;
+  border: 1px solid rgba(255,255,255,.18);
+  border-radius: 9px;
+  background: rgba(12,12,14,.97);
+  color: #fff;
+  box-shadow: 0 8px 28px rgba(0,0,0,.48);
+  pointer-events: none;
+  font: 11px/1.42 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+.xra-help-title { font-weight: 900; margin-bottom: 5px; font-size: 12px; }
+.xra-help-text { color: rgba(255,255,255,.78); }
+.xra-help-perf {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 8px;
+  padding-top: 7px;
+  border-top: 1px solid rgba(255,255,255,.10);
+  color: rgba(255,255,255,.64);
+}
+.xra-help-badge {
+  padding: 2px 7px;
+  border-radius: 999px;
+  font-weight: 800;
+  color: #fff;
+  background: #414145;
+}
+.xra-help-badge.impact-none { background: #33584b; }
+.xra-help-badge.impact-tiny { background: #3f5e52; }
+.xra-help-badge.impact-low { background: #53613a; }
+.xra-help-badge.impact-medium { background: #735f2e; }
+.xra-help-badge.impact-high { background: #7b4630; }
+.xra-help-badge.impact-very_high { background: #7b3030; }
+.xra-help-badge.impact-variable { background: #535069; }
+
+.xra-inline-grid { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 6px; margin: 5px 0; }
+.xra-inline-grid .xra-action { margin: 0; }
+
+/* ============================================================
+   V7.4 — recorder / webcam / advanced native GUI
+   ============================================================ */
+.xra-inline-grid.xra-three-actions {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+.xra-secondary-action {
+  opacity: .78;
+  font-size: 10px;
+}
+
+/* Mirror only the local webcam preview. This does not alter the MediaStream
+   or mocap coordinates. Individual transform property avoids clobbering the
+   native preview's existing transform. */
+.xra-webcam-mirrored {
+  scale: -1 1 !important;
+}
+
+/* Reliable local webcam preview. It reuses XR Animator's existing camera
+   MediaStream and is intentionally a DOM overlay, so recorder scene capture
+   remains avatar/background-only. */
+#XRA_WEBCAM_PREVIEW.xra-webcam-preview {
+  position: fixed;
+  left: 14px;
+  bottom: 14px;
+  width: min(40vw, 520px);
+  height: auto;
+  max-height: 42vh;
+  object-fit: contain;
+  z-index: 9000;
+  pointer-events: none;
+  background: #000;
+  border: 1px solid rgba(255,255,255,.28);
+  border-radius: 8px;
+  box-shadow: 0 4px 18px rgba(0,0,0,.38);
+}
+
+/* ==========================================================================
+   Advanced Visual Effects (lil-gui / dat.gui) Embedded Theme
+   ========================================================================== */
+.xra-native-fx-mount {
+  width: 100%;
+  margin-top: 8px;
+  overflow: visible;
+  --background-color: transparent !important;
+  --text-color: var(--xra-text, #f5f5f6) !important;
+  --title-background-color: rgba(255, 255, 255, 0.025) !important;
+  --widget-color: var(--xra-control, #272729) !important;
+  --hover-color: rgba(255, 255, 255, 0.06) !important;
+  --focus-color: rgba(79, 168, 121, 0.3) !important;
+  --number-color: #6cab89 !important;
+  --string-color: #6cab89 !important;
+  --font-family: inherit !important;
+  --font-size: 11px !important;
+  --input-font-size: 11px !important;
+  --font-family-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace !important;
+  --widget-height: 24px !important;
+  --title-height: auto !important;
+  --widget-border-radius: 6px !important;
+  --checkbox-size: 17px !important;
+}
+
+.xra-native-fx-mount .lil-gui.root {
+  width: 100% !important;
+  max-width: 100% !important;
+  position: static !important;
+  transform: none !important;
+  border-radius: var(--xra-radius, 8px) !important;
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+  color: var(--xra-text, #f5f5f6) !important;
+  font-family: inherit !important;
+  font-size: 11px !important;
+  padding: 0 !important;
+  margin: 0 !important;
+}
+
+/* Hide redundant root "Controls" title bar */
+.xra-native-fx-mount .lil-gui.root > .title {
+  display: none !important;
+}
+
+/* All folders (Light and camera, Post-Processing Effects, etc.) */
+.xra-native-fx-mount .lil-gui .lil-gui {
+  background: rgba(255, 255, 255, 0.02) !important;
+  border: 1px solid var(--xra-row-border, rgba(255, 255, 255, 0.08)) !important;
+  border-radius: 8px !important;
+  margin: 6px 0 !important;
+  overflow: hidden !important;
+}
+
+/* Nested subfolders (level 2+) */
+.xra-native-fx-mount .lil-gui .lil-gui .lil-gui {
+  background: rgba(0, 0, 0, 0.2) !important;
+  border: 1px solid rgba(255, 255, 255, 0.05) !important;
+  border-radius: 6px !important;
+  margin: 5px 0 !important;
+}
+
+/* Folder Titles: completely prevent text overlap with auto height, word-break, and native padding */
+.xra-native-fx-mount .lil-gui .title {
+  height: auto !important;
+  min-height: 28px !important;
+  line-height: 1.35 !important;
+  white-space: normal !important;
+  word-break: break-word !important;
+  overflow: visible !important;
+  padding: 7px 9px !important;
+  background: rgba(255, 255, 255, 0.025) !important;
+  color: var(--xra-text, #f5f5f6) !important;
+  font-family: inherit !important;
+  font-weight: 800 !important;
+  font-size: 11px !important;
+  border-bottom: 1px solid var(--xra-row-border, rgba(255, 255, 255, 0.08)) !important;
+  display: flex !important;
+  align-items: center !important;
+  cursor: pointer !important;
+  user-select: none !important;
+  transition: background 0.15s ease, color 0.15s ease !important;
+}
+
+.xra-native-fx-mount .lil-gui .title:hover {
+  background: rgba(255, 255, 255, 0.06) !important;
+  color: #ffffff !important;
+}
+
+.xra-native-fx-mount .lil-gui.closed > .title {
+  border-bottom: none !important;
+}
+
+/* Folder Children indentation */
+.xra-native-fx-mount .lil-gui .lil-gui > .children {
+  border-left: 2px solid rgba(79, 168, 121, 0.35) !important;
+  margin-left: 6px !important;
+  padding: 4px 6px 6px 8px !important;
+}
+
+/* Controllers (Rows) */
+.xra-native-fx-mount .lil-gui .controller {
+  height: auto !important;
+  min-height: 28px !important;
+  margin: 3px 0 !important;
+  padding: 3px 4px !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.03) !important;
+  gap: 8px !important;
+}
+
+/* Controller Name (Labels) */
+.xra-native-fx-mount .lil-gui .controller > .name {
+  height: auto !important;
+  line-height: 1.3 !important;
+  white-space: normal !important;
+  word-break: break-word !important;
+  overflow: visible !important;
+  color: var(--xra-muted, rgba(255, 255, 255, 0.6)) !important;
+  font-family: inherit !important;
+  font-size: 11px !important;
+  min-width: 80px !important;
+  max-width: 120px !important;
+  flex: 0 0 auto !important;
+}
+
+/* Controller Widget Area */
+.xra-native-fx-mount .lil-gui .controller .widget {
+  flex: 1 1 auto !important;
+  min-width: 0 !important;
+  display: flex !important;
+  align-items: center !important;
+  gap: 6px !important;
+}
+
+/* Number Sliders */
+.xra-native-fx-mount .lil-gui .controller.number .slider {
+  flex: 1 1 auto !important;
+  min-width: 45px !important;
+  height: 10px !important;
+  background: rgba(255, 255, 255, 0.12) !important;
+  border-radius: 5px !important;
+  cursor: ew-resize !important;
+  overflow: hidden !important;
+}
+
+.xra-native-fx-mount .lil-gui .controller.number .slider .fill {
+  background: #4fa879 !important;
+  border-radius: 5px !important;
+}
+
+.xra-native-fx-mount .lil-gui .controller.number .slider:hover .fill,
+.xra-native-fx-mount .lil-gui .controller.number .slider.active .fill {
+  background: #6cab89 !important;
+}
+
+/* Numeric & Text Inputs */
+.xra-native-fx-mount .lil-gui input[type="number"],
+.xra-native-fx-mount .lil-gui input[type="text"] {
+  background: var(--xra-control, #272729) !important;
+  border: 1px solid var(--xra-control-border, rgba(255, 255, 255, 0.22)) !important;
+  border-radius: 6px !important;
+  color: #ffffff !important;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace !important;
+  font-size: 11px !important;
+  height: 24px !important;
+  padding: 2px 5px !important;
+  text-align: right !important;
+  outline: none !important;
+}
+
+.xra-native-fx-mount .lil-gui input[type="number"]:focus,
+.xra-native-fx-mount .lil-gui input[type="text"]:focus {
+  border-color: #6cab89 !important;
+  background: #1c1c1e !important;
+}
+
+.xra-native-fx-mount .lil-gui .controller.number input {
+  width: 48px !important;
+  flex: 0 0 48px !important;
+}
+
+/* Color Controller */
+.xra-native-fx-mount .lil-gui .controller.color .widget {
+  justify-content: flex-end !important;
+  gap: 6px !important;
+}
+
+.xra-native-fx-mount .lil-gui .controller.color .display {
+  height: 24px !important;
+  width: 34px !important;
+  border-radius: 6px !important;
+  border: 1px solid var(--xra-control-border, rgba(255, 255, 255, 0.22)) !important;
+  flex-shrink: 0 !important;
+  cursor: pointer !important;
+}
+
+.xra-native-fx-mount .lil-gui .controller.color input[type="text"] {
+  width: 64px !important;
+  flex: 0 0 64px !important;
+  text-align: center !important;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace !important;
+}
+
+/* Boolean / Checkboxes */
+.xra-native-fx-mount .lil-gui .controller.boolean .widget {
+  justify-content: flex-end !important;
+}
+
+.xra-native-fx-mount .lil-gui input[type="checkbox"] {
+  appearance: auto !important;
+  -webkit-appearance: auto !important;
+  width: 17px !important;
+  height: 17px !important;
+  cursor: pointer !important;
+  accent-color: #4fa879 !important;
+  margin: 0 !important;
+}
+
+/* Select / Dropdown */
+.xra-native-fx-mount .lil-gui select {
+  background: var(--xra-control, #272729) !important;
+  border: 1px solid var(--xra-control-border, rgba(255, 255, 255, 0.22)) !important;
+  border-radius: 6px !important;
+  color: #ffffff !important;
+  font-size: 11px !important;
+  height: 24px !important;
+  padding: 2px 4px !important;
+  outline: none !important;
+  width: 100% !important;
+}
+
+/* Buttons (Reset, actions, etc.) */
+.xra-native-fx-mount .lil-gui button {
+  width: 100% !important;
+  height: 26px !important;
+  line-height: 24px !important;
+  background: #3b3b3e !important;
+  border: 1px solid rgba(255, 255, 255, 0.18) !important;
+  border-radius: 6px !important;
+  color: #ffffff !important;
+  font-size: 11px !important;
+  font-weight: 700 !important;
+  letter-spacing: 0.02em !important;
+  text-transform: uppercase !important;
+  cursor: pointer !important;
+  transition: filter 0.15s ease, background 0.15s ease !important;
+  margin: 3px 0 !important;
+}
+
+.xra-native-fx-mount .lil-gui button:hover {
+  filter: brightness(1.15) !important;
+  background: #454549 !important;
+}
+
+/* Close & legacy overrides */
+.xra-native-fx-mount .xra-native-fx-close,
+.xra-native-fx-mount .close-button,
+.xra-native-fx-mount .close-bottom,
+.xra-native-fx-mount .close-top {
+  display: none !important;
+  visibility: hidden !important;
+  pointer-events: none !important;
+}
+
+@media (max-width: 520px) {
+  .xra-inline-grid.xra-three-actions { grid-template-columns: 1fr; }
+}
+.xra-status.recording {
+  color: #fff;
+  background: rgba(126, 28, 28, .76);
+  border: 1px solid rgba(255, 110, 110, .36);
+  font-weight: 700;
+}
+
+
+/* V7.5 recorder calibration + popup */
+.xra-audio-meter { width: 100%; height: 12px; }
+.xra-gate-meter {
+  position: relative;
+  width: 100%;
+  height: 13px;
+  overflow: hidden;
+  border: 1px solid rgba(255,255,255,.28);
+  border-radius: 5px;
+  background: rgba(0,0,0,.48);
+}
+.xra-gate-meter-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 0;
+  background: rgba(255,255,255,.58);
+}
+.xra-gate-meter-threshold {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 34%;
+  width: 2px;
+  transform: translateX(-1px);
+  background: rgba(255,255,255,.98);
+  box-shadow: 0 0 0 1px rgba(0,0,0,.42);
+}
+.xra-gate-scale {
+  display: flex;
+  justify-content: space-between;
+  gap: 3px;
+  margin-top: 2px;
+  color: var(--xra-muted);
+  font: 9px/1.2 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+[data-xra-recording-confirm] .xra-start-card { width: min(520px, calc(100vw - 28px)); }
+[data-xra-recording-confirm] .xra-start-card > label { display: block; margin: 9px 0 4px; }
+[data-xra-recording-confirm] .xra-start-card .xra-control { width: 100%; box-sizing: border-box; margin-bottom: 4px; }
+[data-xra-recording-confirm] .xra-start-card .xra-status { white-space: pre-wrap; margin-top: 10px; }
+
+/* V7.5: legacy bottom toolbar permanently removed from layout. */
+#Ldungeon_inventory,
+#Ldungeon_inventory_backpack { display: none !important; visibility: hidden !important; pointer-events: none !important; }
+
+/* V7.6 persistent recording HUD. HTML overlay is intentionally outside the
+   clean scene compositor, so it remains visible to the user but never enters
+   the recorded video. */
+.xra-recording-hud {
+  position: fixed;
+  top: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1000012;
+  width: min(560px, calc(100vw - 28px));
+  padding: 10px;
+  border: 1px solid rgba(255,105,105,.46);
+  border-radius: 10px;
+  background: rgba(58,16,16,.94);
+  color: #fff;
+  box-shadow: 0 10px 36px rgba(0,0,0,.48);
+  backdrop-filter: blur(8px);
+  font: 12px/1.4 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  pointer-events: auto;
+}
+.xra-recording-hud.finalizing { background: rgba(58,44,16,.95); border-color: rgba(255,214,105,.42); }
+.xra-recording-hud-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 6px; }
+.xra-recording-hud-badge { font-weight: 900; letter-spacing: .04em; }
+.xra-recording-hud-time { font: 800 20px/1 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.xra-recording-hud-info { white-space: pre-wrap; overflow-wrap: anywhere; color: rgba(255,255,255,.83); font: 10px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.xra-recording-hud-stop {
+  width: 100%; margin-top: 8px; padding: 9px 10px; border: 0; border-radius: 7px;
+  background: #a52f2f; color: #fff; font: 800 12px/1.2 system-ui, sans-serif; cursor: pointer;
+}
+.xra-recording-hud-stop:disabled { opacity: .45; cursor: default; }
+
+/* Lightweight V7.6 diagnostics HUD. */
+.xra-diagnostics-hud {
+  position: fixed; left: 10px; bottom: 10px; z-index: 1000008;
+  min-width: 210px; max-width: min(360px, calc(100vw - 20px));
+  padding: 8px 9px; border: 1px solid rgba(255,255,255,.16); border-radius: 8px;
+  background: rgba(12,12,13,.86); color: rgba(255,255,255,.82);
+  font: 10px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  white-space: pre-wrap; pointer-events: none;
+}
+
+
+/* V7.6.24 — exact native shell cleanup + cheap 1 Hz health indicators. */
+/* Stable upstream ids: quick menu = native Restart/About/File strip;
+   Cdungeon_status_bar = circular avatar medallion. Keep semantic classes as
+   fallbacks for builds which wrap/recreate the same controls dynamically. */
+#Lquick_menu,
+#Cdungeon_status_bar,
+.xra-retired-native-topbar,
+.xra-retired-avatar-badge {
+  display: none !important;
+  visibility: hidden !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
+
+.xra-health-strip {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 4px;
+  margin: 0 0 7px;
+  padding: 5px;
+  border: 1px solid var(--xra-row-border);
+  border-radius: 8px;
+  background: rgba(0,0,0,.18);
+}
+.xra-health-item {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-width: 0;
+  color: var(--xra-muted);
+  font: 800 9px/1.2 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+.xra-health-dot { width: 7px; height: 7px; border-radius: 50%; background: rgba(255,255,255,.30); box-shadow: 0 0 0 1px rgba(255,255,255,.10); }
+.xra-health-item[data-state="ok"] { color: rgba(255,255,255,.86); }
+.xra-health-item[data-state="ok"] .xra-health-dot { background: #59c985; }
+.xra-health-item[data-state="warn"] { color: #ffd58a; }
+.xra-health-item[data-state="warn"] .xra-health-dot { background: #e0a84e; }
+.xra-health-item[data-state="error"] { color: #ff9b9b; }
+.xra-health-item[data-state="error"] .xra-health-dot { background: #d95757; }
+.xra-start-avatar { margin: 8px 0; padding: 7px; border-radius: 7px; background: rgba(255,255,255,.035); }
+.xra-start-avatar .xra-action { margin: 5px 0 0; }
+
+/* ============================================================
+   Live recording microphone status indicator (bottom-center)
+   ============================================================ */
+.xra-rec-mic-indicator {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1000000;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px;
+  border-radius: 999px;
+  background: rgba(12, 12, 16, 0.88);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.45);
+  pointer-events: none;
+  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: #f1f5f9;
+  user-select: none;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.xra-rec-mic-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  transition: background-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.xra-rec-mic-indicator.mic-open {
+  border-color: rgba(34, 197, 94, 0.45);
+}
+
+.xra-rec-mic-indicator.mic-open .xra-rec-mic-dot {
+  background-color: #22c55e;
+  box-shadow: 0 0 8px #22c55e;
+}
+
+.xra-rec-mic-indicator.mic-muted {
+  border-color: rgba(239, 68, 68, 0.45);
+}
+
+.xra-rec-mic-indicator.mic-muted .xra-rec-mic-dot {
+  background-color: #ef4444;
+  box-shadow: 0 0 8px #ef4444;
+}
+
+body.xra-native-ui-hidden .xra-rec-mic-indicator,
+body.xra-total-clean-screen .xra-rec-mic-indicator {
+  display: none !important;
+}
