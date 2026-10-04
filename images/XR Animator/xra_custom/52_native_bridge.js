@@ -1212,8 +1212,11 @@
       // native on-stage layout syncs — which never happens in native mode.
       // Reparenting shows the real canvas, so clear it and force visible.
       node.classList.remove('xra-mocap-wireframe-pending');
-      node.style.setProperty('visibility', 'visible', 'important');
       node.hidden = false;
+      node.style.setProperty('visibility', 'visible', 'important');
+      node.style.setProperty('display', 'block', 'important');
+      node.style.setProperty('opacity', '1', 'important');
+      if (node.dataset) node.dataset.xraMocapLayoutReady = '1';
     }
 
     const wantsVideo = config.ui?.mocap_view === 'both' || config.ui?.mocap_view === 'video';
