@@ -1,5 +1,6 @@
 import { defineConfig } from 'vite'
 import { svelte } from '@sveltejs/vite-plugin-svelte'
+import tailwindcss from '@tailwindcss/vite'
 
 // Rollup/Vite hoist Svelte's internal runtime helpers (including a top-level
 // `$`) above the entry wrapper, so a plain library build leaks them onto
@@ -22,7 +23,7 @@ function wrapIife() {
 // Builds the Svelte UI as a single classic (IIFE) script that auto-mounts into
 // #XRA_SVELTE, so the existing classic <script src> loading model can pull it in.
 export default defineConfig({
-  plugins: [svelte(), wrapIife()],
+  plugins: [svelte(), tailwindcss(), wrapIife()],
   build: {
     outDir: '../images/XR Animator/xra_ui',
     emptyOutDir: true,

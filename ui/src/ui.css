@@ -1,3 +1,10 @@
+/* Tailwind v4 — theme + utilities only. Preflight (base) is intentionally
+   omitted: this bundle is injected into the XR Animator host page, and a
+   global element reset would break the host's canvas/UI. */
+@layer theme, base, components, utilities;
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/utilities.css" layer(utilities);
+
 :root {
   --xra-ui-bg: rgba(20, 22, 24, .96);
   --xra-ui-bg2: rgba(30, 33, 36, .96);
