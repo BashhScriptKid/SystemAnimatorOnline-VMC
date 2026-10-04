@@ -762,7 +762,7 @@
       } catch (e) {
         if (!globalThis.XRA_CAMERA_OWNERSHIP?.isOwnershipError?.(e)) {
           status.textContent = (live ? 'Stop' : 'Start') + ' failed: ' + e.message;
-          XRA.toast?.('Avvio telecamera: ' + e.message, 'warn', 5000);
+          XRA.toast?.('Starting camera: ' + e.message, 'warn', 5000);
         }
       } finally {
         toggleButton.disabled = false;

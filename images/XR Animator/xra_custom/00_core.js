@@ -1424,7 +1424,7 @@
     const btnLater = document.createElement('button');
     btnLater.type = 'button';
     btnLater.className = 'xra-action';
-    btnLater.textContent = 'Chiudi dopo';
+    btnLater.textContent = 'Close in';
     btnLater.onclick = () => overlay.remove();
 
     const btnQuit = document.createElement('button');
@@ -1432,7 +1432,7 @@
     btnQuit.className = 'xra-action primary';
     btnQuit.style.background = '#c0392b';
     btnQuit.style.borderColor = '#e74c3c';
-    btnQuit.textContent = '❌ Chiudi applicazione';
+    btnQuit.textContent = '❌ Close application';
     btnQuit.onclick = async () => {
       btnQuit.disabled = true;
       btnQuit.textContent = 'Chiusura…';

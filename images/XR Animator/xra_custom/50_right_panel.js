@@ -311,7 +311,7 @@
       } catch (e) {}
       lockStatus.textContent = locked
         ? 'Controlli mouse: BLOCCATI (inquadratura fissa)'
-        : 'Controlli mouse: ATTIVI';
+        : 'Mouse controls: ACTIVE';
     };
 
     const shouldBlockEvent = (e) => {
@@ -725,13 +725,13 @@
     gateLip.dataset.xra = 'meter-gate-lip';
     gateLip.style.background = '#48bb78';
     gateLip.style.zIndex = '2';
-    gateLip.title = 'Soglia Lip-sync';
+    gateLip.title = 'Lip-sync threshold';
 
     const gateRec = el('div', 'xra-meter-gate');
     gateRec.dataset.xra = 'meter-gate-rec';
     gateRec.style.background = '#ed8936';
     gateRec.style.zIndex = '3';
-    gateRec.title = 'Soglia Noise Gate REC';
+    gateRec.title = 'REC Noise Gate threshold';
 
     meter.append(fill, gateLip, gateRec);
 
@@ -1372,7 +1372,7 @@
             syncGripInputs();
           } else throw new Error(json.error);
         } catch(err) {
-          XRA.toast('Errore caricamento: ' + err.message, 'error', 5000);
+          XRA.toast('Loading error: ' + err.message, 'error', 5000);
         }
       };
       input.click();
@@ -1606,7 +1606,7 @@
         await saveGrip();
       },
       isDefault: () => (config.object_tracking?.grip?.[propSelect.value]?.rot_x ?? 0) === 0,
-      sub: 'Ruota oggetto sull\'asse X'
+      sub: 'Rotate object around X axis'
     });
     row(gripBox.body, 'Yaw (Y)', rotYWrap, {
       reset: async () => {
@@ -1617,7 +1617,7 @@
         await saveGrip();
       },
       isDefault: () => (config.object_tracking?.grip?.[propSelect.value]?.rot_y ?? 0) === 0,
-      sub: 'Ruota oggetto sull\'asse Y'
+      sub: 'Rotate object around Y axis'
     });
     row(gripBox.body, 'Roll (Z)', rotZWrap, {
       reset: async () => {
@@ -1628,7 +1628,7 @@
         await saveGrip();
       },
       isDefault: () => (config.object_tracking?.grip?.[propSelect.value]?.rot_z ?? 0) === 0,
-      sub: 'Ruota oggetto sull\'asse Z'
+      sub: 'Rotate object around Z axis'
     });
     row(gripBox.body, 'Scale', scaleWrap, {
       reset: async () => {
@@ -2219,7 +2219,7 @@
       if (!snapshot.connected) phase = 'connessione…';
       else if (!snapshot.ready) phase = 'caricamento modello…';
       else if (cap.running && (cap.available || frames > 0)) phase = 'attivo';
-      else if (cap.running) phase = 'camera in avvio…';
+      else if (cap.running) phase = 'camera starting…';
       else phase = 'pronto';
 
       const cam = cap.device ? ` · ${cap.device}` : '';
@@ -2779,7 +2779,7 @@
       }
       catch (e) {
         console.warn(TAG, 'mountFxGui failed', e);
-        fxStatus.textContent = 'Impossibile caricare i parametri: ' + e.message;
+        fxStatus.textContent = 'Unable to load parameters: ' + e.message;
       }
     };
 
@@ -2915,7 +2915,7 @@
     catch (e) {
       console.warn(TAG, 'stage list failed', e);
       if (force && XRA.toast) {
-        XRA.toast('Errore aggiornamento scenografie: ' + e.message, 'error');
+        XRA.toast('Stage update error: ' + e.message, 'error');
       }
     }
   }
@@ -2960,7 +2960,7 @@
             throw new Error(json.error || 'Upload fallito');
           }
         } catch (err) {
-          XRA.toast('Errore caricamento scenografia: ' + err.message, 'error', 5000);
+          XRA.toast('Stage loading error: ' + err.message, 'error', 5000);
         }
       };
       input.click();

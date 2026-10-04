@@ -278,7 +278,7 @@
     }
     catch (error) {
       console.error(TAG, 'avatar library save failed', error);
-      XRA.toast('Avatar attivo, ma non è stato salvato in avatars/: ' + (error.message || error), 'error', 6000);
+      XRA.toast('Avatar active, but it was not saved in avatars/: ' + (error.message || error), 'error', 6000);
       return false;
     }
   }

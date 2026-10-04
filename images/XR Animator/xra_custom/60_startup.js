@@ -102,7 +102,7 @@
     avatar.className = 'xra-start-avatar';
     const avatarText = document.createElement('div');
     avatarText.className = 'xra-sub';
-    avatarText.textContent = 'Avatar: l’ultimo VRM scelto viene copiato in avatars/ e ripristinato all’avvio.';
+    avatarText.textContent = 'Avatar: the last VRM you chose is copied into avatars/ and restored at startup.';
     const avatarButton = document.createElement('button');
     avatarButton.type = 'button';
     avatarButton.className = 'xra-action';
@@ -300,7 +300,7 @@
       closing = true;
       if (readinessTimer) { clearInterval(readinessTimer); readinessTimer = 0; }
       start.disabled = true;
-      start.textContent = 'Avvio in corso…';
+      start.textContent = 'Starting…';
       try { await XRA.profileService.save(0); } catch (e) {}
       overlay.remove();
       XRA.ui?.refresh?.();
@@ -316,7 +316,7 @@
         } catch (e) {
           if (!globalThis.XRA_CAMERA_OWNERSHIP?.isOwnershipError?.(e)) {
             console.warn(TAG, 'Auto-starting camera on START failed', e);
-            XRA.toast?.('Avvio telecamera: ' + e.message, 'warn', 5000);
+            XRA.toast?.('Starting camera: ' + e.message, 'warn', 5000);
           }
         }
       }

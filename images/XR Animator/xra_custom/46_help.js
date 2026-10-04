@@ -164,7 +164,7 @@
     '↻ Refresh cameras': ['Rileva nuove telecamere collegate al computer.', 'tiny'],
     '↻ Restart webcam': ['Riavvia la telecamera selezionata.', 'medium'],
     '⇄ Mirror pose': ['Inverte a specchio la posa dell\'avatar.', 'none'],
-    '↺ Reset pose': ['Riporta l\'avatar alla postura eretta iniziale.', 'none'],
+    '↺ Reset pose': ['Returns the avatar to its initial upright posture.', 'none'],
     '↺ Reset pose order': ['Ripristina l\'elenco originale delle pose disponibili.', 'none'],
     '● Record': ['Avvia la registrazione video pulita: i menu a schermo non saranno visibili nel video salvato.', 'high'],
     '■ Stop': ['Ferma e finalizza la registrazione salvando il file.', 'none'],
