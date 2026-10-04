@@ -218,6 +218,21 @@ for model_id in registry.REGISTRY:
         raise SystemExit(f"download failed {model_id}: {result.get('error')}")
 PY_SMOKE
 
+# Build the Svelte control surface into images/XR Animator/xra_ui/ so the
+# packaged app never ships a stale bundle. Set XRA_SKIP_UI_BUILD=1 to reuse the
+# committed bundle (e.g. offline builds without an npm toolchain).
+if [ "${XRA_SKIP_UI_BUILD:-0}" != "1" ]; then
+  if command -v npm >/dev/null 2>&1; then
+    echo "[build] Building Svelte UI bundle..."
+    if [ ! -d "$ROOT_DIR/ui/node_modules" ]; then
+      ( cd "$ROOT_DIR/ui" && npm ci --no-audit --no-fund )
+    fi
+    ( cd "$ROOT_DIR/ui" && npm run build )
+  else
+    echo "[build] WARNING: npm not found; shipping committed UI bundle." >&2
+  fi
+fi
+
 # The final product is the NW.js bundle. build_bundled_browser.py creates the
 # PyInstaller xra_server, copies the NW.js runtime/package and builds the ELF
 # launchers. Always launch this script with the same venv interpreter.

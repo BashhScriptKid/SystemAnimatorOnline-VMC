@@ -26,5 +26,14 @@ if ! "$PYTHON" -c "import mediapipe, cv2" 2>/dev/null; then
 fi
 
 cd "$REPO"
+
+# Rebuild the Svelte control surface so the dev server never serves a stale
+# bundle (a stale bundle once leaked its runtime onto window and broke jQuery).
+# Set XRA_SKIP_UI_BUILD=1 to skip during UI iteration against `npm run dev`.
+if [ "${XRA_SKIP_UI_BUILD:-0}" != "1" ] && command -v npm >/dev/null 2>&1; then
+  echo "building UI bundle: npm --prefix ui run build"
+  ( cd "$REPO/ui" && npm run build )
+fi
+
 echo "launcher: $PYTHON xr_launcher.py $*"
 exec "$PYTHON" xr_launcher.py "$@"
