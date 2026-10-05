@@ -1552,8 +1552,10 @@ class Handler(SimpleHTTPRequestHandler):
             from xra_backends import capture as backend_capture
             source = backend_capture.CAPTURE
             if not source.begin_obs_preview():
+                print("[XRA PREVIEW] mjpg client rejected: preview disabled", flush=True)
                 self.send_error(404, "OBS camera preview is disabled")
                 return
+            print("[XRA PREVIEW] mjpg client connected", flush=True)
         except Exception as exc:
             self.send_error(503, f"OBS camera preview unavailable: {exc}")
             return
@@ -1592,16 +1594,21 @@ class Handler(SimpleHTTPRequestHandler):
             self.close_connection = True
 
             sequence = -1
+            served = 0
             while True:
                 sequence, frame = source.wait_obs_preview_frame(sequence, timeout=1.0)
                 if frame is None:
                     if not source.obs_preview_status().get("enabled"):
+                        print("[XRA PREVIEW] mjpg stream ended (preview disabled)", flush=True)
                         break
                     continue
                 started = time.monotonic()
                 jpeg = encode_jpeg(frame, quality)
                 if not jpeg:
                     continue
+                if served == 0:
+                    print("[XRA PREVIEW] mjpg first frame served", flush=True)
+                served += 1
                 self.wfile.write(b"--frame\r\n")
                 self.wfile.write(b"Content-Type: image/jpeg\r\n")
                 self.wfile.write(f"Content-Length: {len(jpeg)}\r\n\r\n".encode("ascii"))

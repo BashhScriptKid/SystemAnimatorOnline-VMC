@@ -995,6 +995,7 @@ class CaptureSource:
                 self._obs_preview_frame = None
             self._obs_preview_condition.notify_all()
         self._subscribers_changed.set()
+        print(f"[XRA PREVIEW] configure_obs_preview enabled={bool(enabled)}", flush=True)
         return self.obs_preview_status()
 
     def obs_preview_status(self) -> dict:
