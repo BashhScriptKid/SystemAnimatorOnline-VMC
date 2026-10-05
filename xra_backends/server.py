@@ -12,7 +12,7 @@ import threading
 import time
 from typing import Optional
 
-from . import capture, downloader, engine, registry
+from . import capture, contract, engine, registry
 
 _WS_MAGIC = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 _CONNECTION_IDS = itertools.count(1)
@@ -203,6 +203,9 @@ class InferenceWorker:
         self._pose_sender = None
         self._pose_sent = 0
         self._pose_dropped = 0
+        # Monotonic per-connection sequence for browser-uploaded frames (the
+        # camera path uses CaptureSource.frame_id). Stamped onto every pose.
+        self._pose_seq = 0
         self._last_pose_send_ms = 0.0
         self._max_infer_fps = max(1.0, min(60.0, float(os.environ.get("XRA_BACKEND_MAX_FPS", "30"))))
         self._min_idle_s = max(0.0, float(os.environ.get("XRA_BACKEND_MIN_IDLE_MS", "2"))) / 1000.0
@@ -350,6 +353,8 @@ class InferenceWorker:
                 wire["type"] = "pose"
                 wire["ms"] = infer_ms
                 wire["provider"] = engine.ENGINE.provider
+                self._pose_seq += 1
+                contract.stamp_pose(wire, self._pose_seq)
                 self.loop_count += 1
                 self._last_ok = time.time()
                 self._queue_pose(wire)
@@ -381,13 +386,13 @@ class InferenceWorker:
             self._role = role if role in {"control", "pose", "viewer", "legacy"} else "legacy"
             if obj.get("subscribe") is not None:
                 self._set_pose_subscription(bool(obj.get("subscribe")))
-            self._send({
+            self._send(contract.stamp({
                 "type": "hello",
                 "ok": True,
                 "connection_id": self.connection_id,
                 "role": self._role,
                 "subscribed": self._subscribed,
-            }, obj)
+            }), obj)
             return
 
         if mtype == "subscribe":
@@ -642,6 +647,7 @@ class InferenceWorker:
     def _status(self) -> dict:
         st = engine.ENGINE.status()
         return {
+            "contract_version": contract.CONTRACT_VERSION,
             **st,
             "frames": self.loop_count,
             "errors": self.errors,
@@ -714,7 +720,8 @@ def maybe_upgrade(handler) -> bool:
     handler.end_headers()
     conn = WSConnection(handler.rfile, handler.wfile, sock=getattr(handler, "connection", None))
     st = engine.ENGINE.status()
-    conn.send_json({"type": "status", **st, "source": "backend_camera",
+    conn.send_json({"type": "status", "contract_version": contract.CONTRACT_VERSION,
+                    **st, "source": "backend_camera",
                     "capture": capture.CAPTURE.status()})
     worker = InferenceWorker(conn)
     with _ACTIVE_WORKERS_LOCK:

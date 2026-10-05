@@ -46,6 +46,7 @@ except Exception:
 # XR Animator native MediaPipe backend. Import is defensive so a broken model
 # package never prevents the static application server from starting.
 try:
+    from xra_backends import contract as backend_contract
     from xra_backends import registry as backend_registry
     from xra_backends import downloader as backend_downloader
     from xra_backends import engine as backend_engine
@@ -53,6 +54,7 @@ try:
     from xra_backends import provision as backend_provision
     BACKENDS_OK = True
 except Exception as _backend_exc:  # pragma: no cover - import guard
+    backend_contract = None
     backend_registry = None
     backend_downloader = backend_engine = backend_server = None
     backend_provision = None
@@ -1642,6 +1644,7 @@ class Handler(SimpleHTTPRequestHandler):
             transport_status = {}
         return {
             "ok": True,
+            "contract_version": getattr(backend_contract, "CONTRACT_VERSION", None),
             "active": backend_engine.ENGINE.status(),
             "capture": capture_status,
             "hardware": capture_status.get("hardware") or (backend_capture.probe_hardware_info() if hasattr(backend_capture, 'probe_hardware_info') else None),

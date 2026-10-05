@@ -17,7 +17,7 @@ from typing import Callable, Optional
 
 import numpy as np
 
-from . import engine, registry
+from . import contract, engine, registry
 from .hand_smoothing import HandLandmarkSmoother
 
 
@@ -4399,6 +4399,7 @@ class CaptureSource:
             "empty": is_empty,
             "reason": None if not is_empty else "no_detection",
         })
+        contract.stamp_pose(wire, self._frames)
         output_summary = self._landmark_summary(wire, width, height)
         geometry_reason = (wire.get("geometry") or {}).get("reason") or wire.get("reason") or "unknown"
         self._last_landmark_stats = {
@@ -4483,6 +4484,7 @@ class CaptureSource:
         wire["frame_id"] = self._frames
         wire["timestamp_ms"] = int(self._last_frame_at * 1000)
         wire["skipped"] = True
+        contract.stamp_pose(wire, self._frames)
         self._rate_window_frames += 1
         rate_now = time.monotonic()
         rate_elapsed = rate_now - self._rate_window_at
