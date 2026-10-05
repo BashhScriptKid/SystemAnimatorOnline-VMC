@@ -296,5 +296,33 @@ class HandBirthGuardTests(unittest.TestCase):
         self.assertFalse(self._confirm(280.0, 160.0, body, 600.0, face=_face_box()))
 
 
+class LandmarkSummaryTests(unittest.TestCase):
+    def setUp(self):
+        self.capture = CaptureSource()
+
+    def _point(self, score):
+        return {"position": {"x": 0.0, "y": 0.0, "z": 0.0}, "score": score}
+
+    def test_summary_reports_face_and_hand_confidence(self):
+        payload = {
+            "keypoints": [self._point(0.8) for _ in range(33)],
+            "face": {"landmarks": [[0.0, 0.0, 0.0, 1.0]] * 468, "faceInViewConfidence": 0.95},
+            "leftHand": [{"x": 1.0, "y": 1.0, "z": 0.0, "score": 0.9}] * 21,
+            "rightHand": [{"x": 1.0, "y": 1.0, "z": 0.0, "score": 0.4}] * 21,
+        }
+        summary = self.capture._landmark_summary(payload, 640, 360)
+        self.assertEqual(summary["body_points"], 33)
+        self.assertAlmostEqual(summary["face_confidence"], 0.95)
+        self.assertAlmostEqual(summary["left_hand_confidence"], 0.9)
+        self.assertAlmostEqual(summary["right_hand_confidence"], 0.4)
+
+    def test_summary_defaults_confidences_to_zero(self):
+        summary = self.capture._landmark_summary({})
+        self.assertEqual(summary["face_confidence"], 0.0)
+        self.assertEqual(summary["left_hand_confidence"], 0.0)
+        self.assertEqual(summary["right_hand_confidence"], 0.0)
+        self.assertEqual(summary["body_points"], 0)
+
+
 if __name__ == "__main__":
     unittest.main()

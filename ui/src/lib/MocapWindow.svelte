@@ -18,6 +18,96 @@
   let lastT = 0
   let timer = 0
 
+  // Telemetry shown under the header: capture/inference geometry + per-part
+  // confidence (pose / face / each hand).
+  let camRes = $state('—')
+  let infRes = $state('—')
+  let inferMs = $state(0)
+  let poseConf = $state(null)
+  let faceConf = $state(null)
+  let leftConf = $state(null)
+  let rightConf = $state(null)
+  let lastStatusAt = 0
+
+  function fmtRes(geom) {
+    if (!Array.isArray(geom)) return '—'
+    const w = Number(geom[0]), h = Number(geom[1])
+    return w > 0 && h > 0 ? `${Math.round(w)}×${Math.round(h)}` : '—'
+  }
+
+  function avgScore(points) {
+    if (!Array.isArray(points) || !points.length) return null
+    let sum = 0, n = 0
+    for (const p of points) {
+      const s = Number(p?.score ?? p?.visibility)
+      if (Number.isFinite(s)) { sum += s; n++ }
+    }
+    return n ? sum / n : null
+  }
+
+  function num(value) {
+    if (value == null || value === '') return null
+    const v = Number(value)
+    return Number.isFinite(v) ? v : null
+  }
+
+  function confText(v) {
+    return Number.isFinite(v) ? `${Math.round(v * 100)}%` : '—'
+  }
+
+  function confTone(v) {
+    if (!Number.isFinite(v)) return 'text-[var(--xra-ui-dim)]'
+    if (v >= 0.75) return 'text-emerald-400'
+    if (v >= 0.5) return 'text-amber-400'
+    return 'text-red-400'
+  }
+
+  function readTelemetry() {
+    const back = X()?.xraBackend
+    const snap = back?.snapshot?.() || {}
+    const cap = snap.capture || {}
+    // Keep the capture status warm even if the performance panel never opened.
+    const now = performance.now()
+    if (now - lastStatusAt > 1000) {
+      lastStatusAt = now
+      try { back?.refreshStatus?.() } catch (e) {}
+    }
+
+    let cam = fmtRes(cap.capture_geometry?.[0] ? cap.capture_geometry : cap.geometry)
+    if (cam === '—') {
+      const vc = window.System?._browser?.camera?.video_canvas
+      if (vc?.width && vc?.height) cam = `${vc.width}×${vc.height}`
+    }
+    camRes = cam
+    infRes = fmtRes(cap.inference_geometry?.[0] ? cap.inference_geometry : cap.infer_geometry)
+    inferMs = Number(cap.inference_ema_ms || 0)
+
+    // Pose from the raw model output (true confidence); face/hands from the
+    // stabilized output, which is what the skeleton actually renders (raw is
+    // captured before hand recovery, so it reads 0 on a recovered/held hand).
+    const raw = cap.landmarks?.raw || null
+    const out = cap.landmarks?.output || null
+    let pose = num(raw?.score_median ?? out?.score_median)
+    let face = num(out?.face_confidence ?? raw?.face_confidence)
+    let lh = num(out?.left_hand_confidence ?? raw?.left_hand_confidence)
+    let rh = num(out?.right_hand_confidence ?? raw?.right_hand_confidence)
+
+    // Browser-side MediaPipe (or a native worker payload) fallback.
+    const sb = window.SA_bridge?.backend
+    if (sb) {
+      if (pose == null) pose = num(avgScore(sb.latest?.keypoints))
+      if (face == null && sb.face) {
+        face = num(sb.face.faceInViewConfidence) ?? (sb.face.landmarks?.length ? 0.95 : null)
+      }
+      if (lh == null) lh = avgScore(sb.leftHand)
+      if (rh == null) rh = avgScore(sb.rightHand)
+    }
+    poseConf = pose
+    faceConf = face
+    leftConf = lh
+    rightConf = rh
+  }
+
   // 'auto' hides the window entirely while idle; anything else keeps it open
   // (the idle state is painted black + "Tracking is off" instead).
   const showWindow = $derived(get('ui.mocap_visibility', 'always') !== 'auto' || tracking)
@@ -74,6 +164,7 @@
       if (lastFrames != null && now > lastT) fps = Math.max(0, (fr - lastFrames) / ((now - lastT) / 1000))
       lastFrames = fr
       lastT = now
+      readTelemetry()
     }
     poll()
     timer = setInterval(poll, 500)
@@ -113,6 +204,16 @@
         onpointerdown={(e) => e.stopPropagation()}
       ><Icon name="X" size={13} /></button>
     </header>
+    {#if tracking}
+      <div class="flex shrink-0 flex-wrap items-center gap-x-2.5 gap-y-0.5 border-y border-white/10 bg-black/25 px-2 py-1 text-[10px] leading-none tabular-nums">
+        <span class="text-[var(--xra-ui-dim)]">CAM <b class="font-semibold text-[var(--xra-ui-fg)]">{camRes}</b></span>
+        <span class="text-[var(--xra-ui-dim)]">INF <b class="font-semibold text-[var(--xra-ui-fg)]">{infRes}</b>{inferMs > 0 ? ` · ${Math.round(inferMs)}ms` : ''}</span>
+        <span class="text-[var(--xra-ui-dim)]">POSE <b class={confTone(poseConf)}>{confText(poseConf)}</b></span>
+        <span class="text-[var(--xra-ui-dim)]">FACE <b class={confTone(faceConf)}>{confText(faceConf)}</b></span>
+        <span class="text-[var(--xra-ui-dim)]">L <b class={confTone(leftConf)}>{confText(leftConf)}</b></span>
+        <span class="text-[var(--xra-ui-dim)]">R <b class={confTone(rightConf)}>{confText(rightConf)}</b></span>
+      </div>
+    {/if}
     <div class="relative min-h-0 flex-1 overflow-hidden bg-black" bind:this={stageHost}>
       {#if !tracking}
         <div class="absolute inset-0 z-30 grid place-items-center bg-black text-[12px] text-[var(--xra-ui-fg)]">

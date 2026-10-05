@@ -3961,6 +3961,20 @@ class CaptureSource:
             return float((dx * dx + dy * dy) ** 0.5)
 
         face = payload.get("face") if isinstance(payload, dict) else None
+        left_hand = payload.get("leftHand") if isinstance(payload, dict) else None
+        right_hand = payload.get("rightHand") if isinstance(payload, dict) else None
+
+        def hand_confidence(points) -> float:
+            values = [max(0.0, min(1.0, self._point_score(point))) for point in (points or [])]
+            return round(sum(values) / len(values), 3) if values else 0.0
+
+        face_confidence = 0.0
+        if isinstance(face, dict):
+            try:
+                face_confidence = max(0.0, min(1.0, float(face.get("faceInViewConfidence") or 0.0)))
+            except (TypeError, ValueError):
+                face_confidence = 0.0
+
         return {
             "body_points": len(body),
             "body_visible": sum(score >= 0.25 for score in scores),
@@ -3971,8 +3985,11 @@ class CaptureSource:
             "shoulder_span_px": round(span(11, 12), 1),
             "hip_span_px": round(span(23, 24), 1),
             "face_points": len(face.get("landmarks") or []) if isinstance(face, dict) else 0,
-            "left_hand_points": len(payload.get("leftHand") or []) if isinstance(payload, dict) else 0,
-            "right_hand_points": len(payload.get("rightHand") or []) if isinstance(payload, dict) else 0,
+            "face_confidence": round(face_confidence, 3),
+            "left_hand_points": len(left_hand or []),
+            "right_hand_points": len(right_hand or []),
+            "left_hand_confidence": hand_confidence(left_hand),
+            "right_hand_confidence": hand_confidence(right_hand),
         }
 
     def _recover_missing_hands(
