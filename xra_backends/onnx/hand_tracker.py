@@ -4,9 +4,13 @@ Wraps the MediaPipe-architecture palm detector + hand landmark model and adds
 the temporal layer that makes weak-webcam hand tracking usable:
 
 - adaptive palm-detection cadence (detect every frame only while untracked),
-- wrist-seeded reacquisition (seed a landmark-only ROI from the pose wrist),
+- landmark-seeded reacquisition (seed the next ROI from the previous frame's
+  21 landmarks, so a closed fist keeps the crop locked on the hand; fall back
+  to the pose wrist only when no landmarks are known),
 - left/right association by handedness + proximity (no swap on crossing),
 - per-landmark One Euro smoothing (low jitter when still, low lag when fast),
+  with a separate, far less damped filter on z so finger curl is not smoothed
+  away,
 - predictive hold + blend-in so a lost hand decays gracefully and a returning
   one eases in instead of popping.
 
@@ -39,47 +43,11 @@ def _env_int(name, default):
         return default
 
 
-class OneEuroFilter:
-    """Velocity-adaptive low-pass filter (Casiez et al., CHI 2012)."""
-
-    __slots__ = ("mincutoff", "beta", "dcutoff", "_x", "_dx", "_t")
-
-    def __init__(self, mincutoff=1.0, beta=0.007, dcutoff=1.0):
-        self.mincutoff = mincutoff
-        self.beta = beta
-        self.dcutoff = dcutoff
-        self._x = None
-        self._dx = 0.0
-        self._t = None
-
-    @staticmethod
-    def _alpha(cutoff, dt):
-        tau = 1.0 / (2.0 * math.pi * cutoff)
-        return 1.0 / (1.0 + tau / dt)
-
-    def reset(self):
-        self._x = None
-        self._dx = 0.0
-        self._t = None
-
-    def __call__(self, x, t):
-        if self._x is None or self._t is None:
-            self._x = x
-            self._t = t
-            return x
-        dt = t - self._t
-        if dt <= 0:
-            return self._x
-        dx = (x - self._x) / dt
-        a_d = self._alpha(self.dcutoff, dt)
-        dx_hat = a_d * dx + (1.0 - a_d) * self._dx
-        cutoff = self.mincutoff + self.beta * abs(dx_hat)
-        a = self._alpha(cutoff, dt)
-        x_hat = a * x + (1.0 - a) * self._x
-        self._x = x_hat
-        self._dx = dx_hat
-        self._t = t
-        return x_hat
+# Shared with the native MediaPipe post-processing path (see hand_smoothing.py).
+try:
+    from xra_backends.hand_smoothing import OneEuroFilter
+except ImportError:  # pragma: no cover - standalone/path-loaded module
+    from ..hand_smoothing import OneEuroFilter
 
 
 def _new_side():
@@ -108,6 +76,12 @@ class HandTracker:
         self.blend_ms = _env_float("XRA_HAND_BLEND_MS", 150.0)
         self.mincutoff = _env_float("XRA_HAND_MIN_CUTOFF", 1.0)
         self.beta = _env_float("XRA_HAND_BETA", 0.007)
+        # Depth (z) carries the finger curl; filter it far less aggressively than
+        # x/y or a curling finger reads late and mushy.
+        self.z_mincutoff = _env_float("XRA_HAND_Z_MIN_CUTOFF", 6.0)
+        self.z_beta = _env_float("XRA_HAND_Z_BETA", 0.05)
+        # Seed the next ROI from the previous landmarks instead of the pose wrist.
+        self.landmark_seed = _env_int("XRA_HAND_LANDMARK_SEED", 1) != 0
         self._frame = 0
         self._sides = {"left": _new_side(), "right": _new_side()}
 
@@ -118,8 +92,12 @@ class HandTracker:
     def _filters(self, side):
         st = self._sides[side]
         if st["filters"] is None:
-            st["filters"] = [[OneEuroFilter(self.mincutoff, self.beta) for _ in range(3)]
-                             for _ in range(NUM_LANDMARKS)]
+            st["filters"] = [
+                [OneEuroFilter(self.mincutoff, self.beta),
+                 OneEuroFilter(self.mincutoff, self.beta),
+                 OneEuroFilter(self.z_mincutoff, self.z_beta)]
+                for _ in range(NUM_LANDMARKS)
+            ]
         return st["filters"]
 
     def _decode_palms(self, palms):
@@ -147,6 +125,70 @@ class HandTracker:
                 claimed.add(best)
         return out
 
+    def _landmark_seed_row(self, st):
+        """Build a pseudo palm row from the side's previous 21 landmarks.
+
+        The row uses the same layout as a real BlazePalm detection
+        ``(score, cx, cy, width, wrist_x, wrist_y, mcp_x, mcp_y)``, so
+        ``hands.palm_roi`` maps it into the SAME ROI geometry the landmark model
+        was trained on (2.6x palm box, shifted half a box toward the fingers).
+        Deriving it from the hand's own landmarks keeps the crop locked on the
+        hand while the fingers curl, instead of coasting on a stale wrist/frozen
+        direction.
+
+        Returns ``None`` when no usable landmarks are known.
+        """
+        pts = st["pts"]
+        if pts is None or len(pts) < 21:
+            return None
+        wrist_x, wrist_y = float(pts[0][0]), float(pts[0][1])
+        mcp_x, mcp_y = float(pts[9][0]), float(pts[9][1])
+        dx, dy = mcp_x - wrist_x, mcp_y - wrist_y
+        norm = math.hypot(dx, dy)
+        if norm < 1e-3:
+            return None
+        ux, uy = dx / norm, dy / norm
+
+        # Palm width = index-MCP to pinky-MCP span (stays stable on a fist).
+        width = math.hypot(float(pts[5][0]) - float(pts[17][0]),
+                           float(pts[5][1]) - float(pts[17][1]))
+        if width < 1e-3:
+            width = 0.5 * math.hypot(float(pts[9][0]) - float(pts[0][0]),
+                                     float(pts[9][1]) - float(pts[0][1]))
+        if width < 1e-3:
+            width = self._default_width()
+
+        # Palm center estimate, then undo palm_roi's +0.5*width*unit shift so the
+        # produced ROI centers on the hand rather than past the fingers.
+        px = (float(pts[0][0]) + float(pts[5][0]) +
+              float(pts[9][0]) + float(pts[17][0])) / 4.0
+        py = (float(pts[0][1]) + float(pts[5][1]) +
+              float(pts[9][1]) + float(pts[17][1])) / 4.0
+        cx = px - 0.5 * width * ux
+        cy = py - 0.5 * width * uy
+        return [0.9, cx, cy, width, wrist_x, wrist_y, mcp_x, mcp_y]
+
+    def _wrist_seed_row(self, side, pose_wrists):
+        """Fallback pseudo palm row from the pose wrist when no landmarks known."""
+        wrist = (pose_wrists or {}).get(side)
+        if not wrist:
+            return None
+        st = self._sides[side]
+        width = st["palm"][2] if st["palm"] else self._default_width()
+        ux, uy = st["dir"]
+        cx = wrist[0] + 0.5 * width * ux
+        cy = wrist[1] + 0.5 * width * uy
+        mcp = (wrist[0] + ux * 0.5 * width, wrist[1] + uy * 0.5 * width)
+        return [0.9, cx, cy, width, wrist[0], wrist[1], mcp[0], mcp[1]]
+
+    def _seed_palm_row(self, side, pose_wrists):
+        """Landmark-seeded ROI if possible, else the pose-wrist fallback."""
+        if self.landmark_seed:
+            row = self._landmark_seed_row(self._sides[side])
+            if row is not None:
+                return row
+        return self._wrist_seed_row(side, pose_wrists)
+
     # -- main ----------------------------------------------------------------
     def process(self, frame, pose_wrists: Optional[dict]):
         self._frame += 1
@@ -157,21 +199,15 @@ class HandTracker:
         palms = self._palm.detect(frame, 0.5) if detect else np.empty((0, 8), dtype=np.float32)
         matched = self._decode_palms(palms)
 
-        # Seed missing sides from the pose wrist (landmark-only, no detector).
+        # Seed missing sides from the side's last landmarks (landmark-only ROI),
+        # falling back to the pose wrist only when no landmarks are known.
         seeds = []
         for side in ("left", "right"):
             if matched.get(side) is not None:
                 continue
-            wrist = (pose_wrists or {}).get(side)
-            if not wrist:
-                continue
-            st = self._sides[side]
-            width = st["palm"][2] if st["palm"] else self._default_width()
-            ux, uy = st["dir"]
-            cx = wrist[0] + 0.5 * width * ux
-            cy = wrist[1] + 0.5 * width * uy
-            mcp = (wrist[0] + ux * 0.5 * width, wrist[1] + uy * 0.5 * width)
-            seeds.append((side, [0.9, cx, cy, width, wrist[0], wrist[1], mcp[0], mcp[1]]))
+            row = self._seed_palm_row(side, pose_wrists)
+            if row is not None:
+                seeds.append((side, row))
 
         all_palms = list(palms) + [s[1] for s in seeds] if seeds else palms
         seed_offset = len(palms)

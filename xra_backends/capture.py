@@ -18,6 +18,7 @@ from typing import Callable, Optional
 import numpy as np
 
 from . import engine, registry
+from .hand_smoothing import HandLandmarkSmoother
 
 
 def _pin_thread_to_physical_cores(enabled: bool = True) -> None:
@@ -820,6 +821,13 @@ class CaptureSource:
         self._hand_last_trusted_root = {"leftHand": None, "rightHand": None}
         self._hand_world_last_good = {"leftHand": None, "rightHand": None}
         self._hand_was_live = {"leftHand": False, "rightHand": False}
+        # Native MediaPipe emits raw per-frame hand landmarks (no filter); the
+        # ONNX path filters inside onnx.hand_tracker. Smooth native hands here so
+        # a still hand stops jittering. Kill-switch: XRA_HAND_SMOOTH_NATIVE=0.
+        self._hand_smoother = HandLandmarkSmoother.from_env()
+        self._hand_smoothing_native = os.environ.get(
+            "XRA_HAND_SMOOTH_NATIVE", "1"
+        ).lower() in {"1", "true", "yes", "on"}
         self._hand_fist_state = {"leftHand": False, "rightHand": False}
         self._hand_body_fallback = {"leftHand": False, "rightHand": False}
         self._hand_moving_down = {"leftHand": False, "rightHand": False}
@@ -1759,6 +1767,8 @@ class CaptureSource:
         self._hand_last_trusted_root = {"leftHand": None, "rightHand": None}
         self._hand_world_last_good = {"leftHand": None, "rightHand": None}
         self._hand_was_live = {"leftHand": False, "rightHand": False}
+        if getattr(self, "_hand_smoother", None) is not None:
+            self._hand_smoother.reset()
         self._hand_fist_state = {"leftHand": False, "rightHand": False}
         self._hand_body_fallback = {"leftHand": False, "rightHand": False}
         self._hand_moving_down = {"leftHand": False, "rightHand": False}
@@ -4213,6 +4223,25 @@ class CaptureSource:
             payload["_python_hand_recovered_keys"] = list(accepted)
         return payload
 
+    @staticmethod
+    def _is_native_engine() -> bool:
+        """True unless the active engine is the (self-smoothing) ONNX backend."""
+        try:
+            model_id = getattr(engine.ENGINE, "model_id", None)
+        except Exception:
+            return True
+        return model_id != getattr(registry, "ONNX_HOLISTIC_ID", "onnx-mediapipe-holistic")
+
+    def _smooth_hands_in_payload(self, payload: dict, now: Optional[float] = None) -> None:
+        """In-place temporal smoothing of left/right hand landmarks."""
+        if not isinstance(payload, dict):
+            return
+        now = time.monotonic() if now is None else float(now)
+        for key in ("leftHand", "rightHand"):
+            points = payload.get(key)
+            points = points if isinstance(points, list) else []
+            payload[key] = self._hand_smoother.smooth(key, points, now)
+
     def _run_inference(self, frame: np.ndarray) -> None:
         # If infer_mode was changed at runtime, reload the MediaPipe graph now
         # BEFORE preparing the frame, so the new geometry matches the new graph.
@@ -4278,6 +4307,11 @@ class CaptureSource:
             payload["keypoints3D"] = []
             payload["leftHand"] = []
             payload["rightHand"] = []
+        # Native MediaPipe returns unfiltered per-frame hand landmarks; smooth
+        # them the same way the ONNX HandTracker does. The ONNX path already
+        # filters inside the engine, so skip it there to avoid double lag.
+        if self._hand_smoothing_native and self._is_native_engine():
+            self._smooth_hands_in_payload(payload)
         tracking_stable = (
             self._tracking_log_snapshot(payload)
             if self._tracking_log_enabled else None
