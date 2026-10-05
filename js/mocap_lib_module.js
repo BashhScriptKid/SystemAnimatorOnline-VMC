@@ -2228,10 +2228,11 @@ const h_palm = Math.sqrt(palm_height[0]*palm_height[0] + palm_height[1]*palm_hei
 
 let _adjust_ratio = h_palm / w_palm;
 
-// z-shaping heuristics (default ON). Toggle live from the XRA_CONTROL channel
-// ({type:'hand_pose_debug', z_fix:false}); the flag lives on the global object
+// z-shaping heuristics (default OFF: forcing a minimum finger depth deforms
+// articulation). Toggle live from the XRA_CONTROL channel
+// ({type:'hand_pose_debug', z_fix:true}); the flag lives on the global object
 // because the control handler and this function are in different module scopes.
-const XRA_z_fix = ((typeof self !== "undefined") ? self : globalThis).XRA_hand_z_fix_enabled !== false;
+const XRA_z_fix = ((typeof self !== "undefined") ? self : globalThis).XRA_hand_z_fix_enabled === true;
 
 _adjust_ratio = (_adjust_ratio < 1.25) ? 1.25 : ((_adjust_ratio > 1.75) ? 1.75 : 1);
 if (XRA_z_fix && _adjust_ratio != 1) {
