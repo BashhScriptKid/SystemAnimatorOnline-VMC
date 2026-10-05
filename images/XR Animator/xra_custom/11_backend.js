@@ -35,6 +35,15 @@
   const MEDIAPIPE_ID = 'mediapipe';  // sentinel: browser WASM disabled, Python backend owns camera
   const DEFAULT_BACKEND = 'mediapipe-tasks-landmarker';
 
+  // The persisted choice (`performance.tracker_backend`) is the single source of
+  // truth. Resolve it on every (re)connect so a reload can never silently keep a
+  // runtime-only selection (e.g. ONNX) that is not what the profile says.
+  function desiredTrackerBackend() {
+    return globalThis.XRA?.config?.performance?.tracker_backend
+      || globalThis.XRA?.profile?.custom?.performance?.tracker_backend
+      || DEFAULT_BACKEND;
+  }
+
   const state = {
     selected: XRA.profile?.custom?.performance?.tracker_backend || DEFAULT_BACKEND,
     gpuAvailable: false,
@@ -232,6 +241,8 @@
         // this lifecycle socket wastes serialization and can reorder startup state.
         sendControl({ type: 'hello', role: 'control' });
         sendControl({ type: 'subscribe', poses: false });
+        // Respect the saved backend on every connect, not a stale runtime pick.
+        state.selected = desiredTrackerBackend();
         const load = {
           type: 'load',
           model: state.selected,
@@ -414,6 +425,9 @@
       return state.selected;
     }
     state.selected = next;
+    // Persist immediately so the next connect() (and the boot guard) resolves to
+    // the same backend and there is no selection/persistence race.
+    try { if (globalThis.XRA?.config?.performance) globalThis.XRA.config.performance.tracker_backend = next; } catch (e) {}
     if (validComplexity) state.modelComplexity = modelComplexity;
     if (state.selected === MEDIAPIPE_ID) {
       // Release Python resources before closing the only control socket.
@@ -1107,8 +1121,8 @@
     if (data.type === 'camera_index') invoke(configure({ index: data.value ?? data.index }));
   });
 
-  XRA.events?.on?.('profile-loaded', (cfg) => {
-    const desired = cfg?.performance?.tracker_backend || XRA.profile?.custom?.performance?.tracker_backend;
+  XRA.events?.on?.('profile-loaded', () => {
+    const desired = desiredTrackerBackend();
     if (desired && desired !== state.selected) {
       select(desired);
     }
