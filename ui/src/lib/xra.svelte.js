@@ -67,10 +67,67 @@ function applyHook(path) {
     window.XRA_gpu_preference = String(config.performance.gpu_preference || 'default')
     window.XRA_preserve_drawing_buffer = config.performance.preserve_drawing_buffer !== false
     window.XRA_antialias = config.performance.antialias !== 'off'
+    // Camera follows the inference resolution: re-resolve capture geometry when
+    // the inference size changes while the follow option is on.
+    if (path === 'performance.infer_mode' && config.camera?.follow_inference) {
+      try { X.performance?.apply?.() } catch (e) {}
+    }
     X.events?.emit?.('performance', config.performance)
     return
   }
+  if (path === 'camera.follow_inference') {
+    try { X.performance?.apply?.() } catch (e) {}
+    X.events?.emit?.('config-change', { path, value: get(path) })
+    return
+  }
+  if (path === 'camera.width' || path === 'camera.height') {
+    // Custom-resolution sliders: debounce so dragging does not reopen the
+    // capture device on every input step.
+    scheduleCameraApply()
+    X.events?.emit?.('config-change', { path, value: get(path) })
+    return
+  }
   X.events?.emit?.('config-change', { path, value: get(path) })
+}
+
+let cameraApplyTimer = 0
+function scheduleCameraApply() {
+  clearTimeout(cameraApplyTimer)
+  cameraApplyTimer = setTimeout(() => {
+    try { window.XRA?.performance?.apply?.() } catch (e) {}
+  }, 300)
+}
+
+// Write the Camera "Resolution" dropdown. It drives camera.follow_inference,
+// camera.custom_resolution and camera.width/height together, mirrors to the
+// host config, then applies + persists once.
+export function setCameraResolution(value) {
+  const cam = config.camera || (config.camera = {})
+  if (value === 'follow') {
+    cam.follow_inference = true
+    cam.custom_resolution = false
+  } else if (value === 'custom') {
+    cam.follow_inference = false
+    cam.custom_resolution = true
+  } else {
+    const [w, h] = String(value).split('x').map(Number)
+    if (w > 0 && h > 0) {
+      cam.follow_inference = false
+      cam.custom_resolution = false
+      cam.width = w
+      cam.height = h
+    }
+  }
+  const host = window.XRA?.config
+  if (host) {
+    host.camera ||= {}
+    host.camera.follow_inference = cam.follow_inference
+    host.camera.custom_resolution = cam.custom_resolution
+    if (cam.width != null) host.camera.width = cam.width
+    if (cam.height != null) host.camera.height = cam.height
+  }
+  try { window.XRA?.performance?.apply?.() } catch (e) {}
+  try { window.XRA?.profileService?.save?.() } catch (e) {}
 }
 
 export function set(path, value) {

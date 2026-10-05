@@ -851,6 +851,7 @@
 
     const pose = poseOverride || preset.pose;
     config.camera.optimized = true;
+    config.camera.follow_inference = false;
     [config.camera.width, config.camera.height, config.camera.fps] = preset.cam;
     config.pose_model = pose;
     config.lip.optimized = true;
@@ -1085,10 +1086,11 @@
     nativeSummary() {
       const smoothing = window.System?._browser?.camera?.mocap_data_smoothing ?? 0;
       const bend = window.System?._browser?.camera?.poseNet?.body_bend_reduction_power ?? 0;
+      const [camWidth, camHeight] = XRA.captureGeometry(config);
       return {
         mocap: currentNativeType() || 'native',
-        width: config.camera.width,
-        height: config.camera.height,
+        width: camWidth,
+        height: camHeight,
         fps: config.camera.fps,
         pose: config.pose_model,
         smoothing,

@@ -113,8 +113,16 @@
   const defaults = {
     camera: {
       optimized: true,
-      width: 640,
-      height: 480,
+      // 16:9 default (was 640x480 / 4:3).
+      width: 1280,
+      height: 720,
+      // When true, capture follows the explicit MediaPipe inference resolution
+      // (config.performance.infer_mode) so the frame is never rescaled between
+      // the sensor and the model. 'native' inference keeps width/height as-is.
+      follow_inference: false,
+      // Set by the Camera "Resolution → Custom…" choice; reveals the raw
+      // width/height sliders in the settings panel.
+      custom_resolution: false,
       fps: 30,
       mouse_locked: false,
       view_presets: [],
@@ -454,6 +462,24 @@
     clamp(v, min, max) { return Math.max(min, Math.min(max, Number(v))); },
     sleep(ms) { return new Promise(resolve => setTimeout(resolve, ms)); },
     same(a, b) { return JSON.stringify(a) === JSON.stringify(b); }
+  };
+
+  // Resolved camera capture geometry. Honors the "follow inference resolution"
+  // option: when enabled and the inference resolution is explicit, capture
+  // matches it (no up/downscale between sensor and model). 'native' inference
+  // means inference == capture, so the stored width/height are kept.
+  XRA.captureGeometry = function captureGeometry(cfg = config) {
+    const camera = cfg?.camera || {};
+    let width = Number(camera.width) || 640;
+    let height = Number(camera.height) || 360;
+    if (camera.follow_inference) {
+      const mode = String(cfg?.performance?.infer_mode || 'native').trim().toLowerCase();
+      if (mode !== 'native') {
+        const [inferW, inferH] = mode.split('x').map(Number);
+        if (inferW > 0 && inferH > 0) { width = inferW; height = inferH; }
+      }
+    }
+    return [width, height];
   };
 
   let ecoModeActive = false;

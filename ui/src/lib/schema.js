@@ -24,10 +24,29 @@ export const SECTION_INFO = {
 }
 
 // Sections rendered in this order; anything else follows alphabetically.
-export const SECTION_ORDER = ['performance', 'tracking', 'body', 'collider', 'lip', 'background', 'stage', 'avatar', 'second_avatar', 'recorder', 'visual_effects', 'debug', 'ui', 'camera', 'devices', 'pose_model']
+export const SECTION_ORDER = ['performance', 'camera', 'tracking', 'body', 'collider', 'lip', 'background', 'stage', 'avatar', 'second_avatar', 'recorder', 'visual_effects', 'debug', 'ui', 'devices', 'pose_model']
 
 export const SKIP_SECTIONS = new Set(['left_settings', '_custom_', '_excluded_'])
-export const SKIP_PATHS = new Set(['camera.view_presets', 'camera.selected_view_preset', 'ui.preview_video', 'ui.preview_wireframe', 'ui.preview_debug', 'performance.auto_last_result', 'performance.tracker_backend', 'recorder.output_dir'])
+export const SKIP_PATHS = new Set(['camera.view_presets', 'camera.selected_view_preset', 'camera.follow_inference', 'camera.custom_resolution', 'ui.preview_video', 'ui.preview_wireframe', 'ui.preview_debug', 'performance.auto_last_result', 'performance.tracker_backend', 'recorder.output_dir'])
+
+// Camera capture resolution presets (16:9 + the common 4:3 mode). The camera
+// resolution dropdown merges these with the device's supported modes plus the
+// special "Follow inference resolution" and "Custom…" entries.
+export const CAMERA_RESOLUTION_PRESETS = [
+  [320, 240], [352, 288], [640, 360], [640, 480], [1280, 720], [1920, 1080]
+]
+
+export function cameraResolutionKey(camera) {
+  const c = camera || {}
+  if (c.follow_inference) return 'follow'
+  if (c.custom_resolution) return 'custom'
+  return `${c.width}x${c.height}`
+}
+
+export function isCustomCameraResolution(config) {
+  const c = config?.camera || {}
+  return !c.follow_inference && !!c.custom_resolution
+}
 
 function humanize(s) {
   const words = String(s).replace(/_/g, ' ').replace(/([a-z])([A-Z])/g, '$1 $2').trim()
@@ -144,8 +163,10 @@ export const OVERRIDES = {
   'recorder.filename': { type: 'text' },
 
   'camera.optimized': { type: 'toggle' },
-  'camera.width': { type: 'slider', min: 160, max: 1920, step: 2 },
-  'camera.height': { type: 'slider', min: 120, max: 1080, step: 2 },
+  // camera.follow_inference is merged into the synthetic camera.resolution
+  // dropdown (see buildSections) and is intentionally not rendered directly.
+  'camera.width': { type: 'slider', min: 160, max: 1920, step: 2, when: (c) => isCustomCameraResolution(c) },
+  'camera.height': { type: 'slider', min: 120, max: 1080, step: 2, when: (c) => isCustomCameraResolution(c) },
   'camera.fps': { type: 'slider', min: 5, max: 60, step: 1 }
 }
 
@@ -173,6 +194,16 @@ export function buildSections(config) {
         type, path, label: ov.label || humanize(field),
         min: ov.min, max: ov.max, step: ov.step, options: ov.options,
         when: ov.when, enabled: ov.enabled, group: ov.group, desc: ov.desc,
+      })
+    }
+    if (key === 'camera') {
+      // Single resolution dropdown: presets + "Follow inference resolution" +
+      // "Custom…" (which reveals the width/height sliders above).
+      controls.unshift({
+        type: 'camera-resolution',
+        path: 'camera.resolution',
+        label: 'Resolution',
+        desc: 'Capture resolution. "Follow inference resolution" matches MediaPipe; "Custom…" reveals the width/height sliders.',
       })
     }
     if (controls.length) sections.push({ id: key, title: info.title || humanize(key), icon: info.icon || '⚙', controls })

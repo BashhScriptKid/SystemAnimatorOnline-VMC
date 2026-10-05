@@ -1828,6 +1828,8 @@
       ['640x480', '640×480 (Formato standard 4:3)'],
       ['1280x720', '1280×720 (HD 720p · Alta precisione)']
     ];
+    // Sentinel option: capture tracks the MediaPipe inference resolution.
+    const FOLLOW_INFERENCE_RESOLUTION = ['follow', 'Follow inference resolution (auto)'];
 
     const res = select(OPTIMAL_RESOLUTIONS);
     const updateDynamicResolutions = () => {
@@ -1852,6 +1854,7 @@
       } else {
         opts = OPTIMAL_RESOLUTIONS;
       }
+      opts = [...opts, FOLLOW_INFERENCE_RESOLUTION];
       const existingKeys = [...res.options].map(o => o.value).join(',');
       const newKeys = opts.map(o => o[0]).join(',');
       if (existingKeys !== newKeys) {
@@ -1862,15 +1865,22 @@
           res.appendChild(opt);
         }
       }
-      const current = `${config.camera.width}x${config.camera.height}`;
+      const current = config.camera.follow_inference
+        ? 'follow'
+        : `${config.camera.width}x${config.camera.height}`;
       res.value = [...res.options].some(o => o.value === current) ? current : (res.options[0]?.value || '640x360');
     };
     bindRefresh(updateDynamicResolutions);
 
     res.onchange = async () => {
-      const [w, h] = res.value.split('x').map(Number);
-      config.camera.width = w;
-      config.camera.height = h;
+      if (res.value === 'follow') {
+        config.camera.follow_inference = true;
+      } else {
+        const [w, h] = res.value.split('x').map(Number);
+        config.camera.follow_inference = false;
+        config.camera.width = w;
+        config.camera.height = h;
+      }
       markCustomPreset();
       XRA.performance.apply();
       await XRA.profileService.save();
@@ -1878,12 +1888,15 @@
     };
     row(secWebcam.body, 'Webcam resolution', res, {
       reset: async () => {
+        config.camera.follow_inference = false;
         config.camera.width = defaults.camera.width;
         config.camera.height = defaults.camera.height;
         XRA.performance.apply();
       },
-      isDefault: () => config.camera.width === defaults.camera.width && config.camera.height === defaults.camera.height,
-      sub: 'Risoluzione hardware della webcam. Valori selezionati vengono applicati direttamente al sensore.'
+      isDefault: () => !config.camera.follow_inference
+        && config.camera.width === defaults.camera.width
+        && config.camera.height === defaults.camera.height,
+      sub: 'Hardware webcam resolution. "Follow inference resolution" matches capture to the MediaPipe resolution to avoid rescaling.'
     });
 
     const inferRes = select([
