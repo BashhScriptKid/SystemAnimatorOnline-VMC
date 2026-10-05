@@ -2,7 +2,14 @@ import unittest
 from copy import deepcopy
 from unittest.mock import patch
 
-from xra_backends.capture import CaptureSource
+try:
+    from xra_backends.capture import CaptureSource
+    _NATIVE_AVAILABLE = True
+except Exception:  # native inference deps (mediapipe/cv2) not installed
+    CaptureSource = None
+    _NATIVE_AVAILABLE = False
+
+_NATIVE_REASON = "native backend deps (mediapipe/cv2) are not installed"
 
 
 def _hand_at(root_x, root_y):
@@ -50,6 +57,7 @@ def _scene_body(elbow, wrist):
     return body
 
 
+@unittest.skipUnless(_NATIVE_AVAILABLE, _NATIVE_REASON)
 class HandBirthGuardTests(unittest.TestCase):
     def setUp(self):
         self.capture = CaptureSource()
@@ -296,6 +304,7 @@ class HandBirthGuardTests(unittest.TestCase):
         self.assertFalse(self._confirm(280.0, 160.0, body, 600.0, face=_face_box()))
 
 
+@unittest.skipUnless(_NATIVE_AVAILABLE, _NATIVE_REASON)
 class LandmarkSummaryTests(unittest.TestCase):
     def setUp(self):
         self.capture = CaptureSource()
