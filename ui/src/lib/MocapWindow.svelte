@@ -108,9 +108,11 @@
     rightConf = rh
   }
 
-  // 'auto' hides the window entirely while idle; anything else keeps it open
-  // (the idle state is painted black + "Tracking is off" instead).
-  const showWindow = $derived(get('ui.mocap_visibility', 'always') !== 'auto' || tracking)
+  // The component stays mounted so the native layers never re-parent; 'off'
+  // just hides it. 'auto' also hides it while idle (idle is painted black +
+  // "Tracking is off" instead when visibility is 'always').
+  const enabled = $derived(get('ui.mocap_view', 'off') !== 'off')
+  const showWindow = $derived(enabled && (get('ui.mocap_visibility', 'always') !== 'auto' || tracking))
 
   function commit() {
     set('ui.mocap_window', { x: Math.round(x), y: Math.round(y), w: Math.round(w), h: Math.round(h) })
@@ -152,8 +154,8 @@
 
   // Keep the stage transform in sync with the window geometry and tracking.
   $effect(() => {
-    void x; void y; void w; void h; void tracking
-    update()
+    void x; void y; void w; void h; void tracking; void showWindow
+    if (showWindow) update()
   })
 
   onMount(() => {
@@ -173,10 +175,9 @@
   })
 </script>
 
-{#if showWindow}
   <div
     class="xra-mocap-window fixed z-[99991] flex flex-col overflow-hidden rounded-xl border border-white/15 bg-[var(--xra-ui-bg)] text-[var(--xra-ui-fg)] shadow-[0_16px_48px_rgba(0,0,0,.6)] font-sans"
-    style="left:{x}px; top:{y}px; width:{w}px; height:{h}px;"
+    style="display:{showWindow ? 'flex' : 'none'}; left:{x}px; top:{y}px; width:{w}px; height:{h}px;"
   >
     <header class="flex shrink-0 cursor-move touch-none select-none items-center gap-2 px-2 py-1.5" onpointerdown={(e) => drag(e, 'move')}>
       <Icon name="Activity" size={14} />
@@ -227,4 +228,3 @@
       ></div>
     </div>
   </div>
-{/if}

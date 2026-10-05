@@ -1,5 +1,5 @@
 <script>
-  import { app, config, boot, get, toggleClean, refreshStatus } from './lib/xra.svelte.js'
+  import { app, config, boot, toggleClean, refreshStatus } from './lib/xra.svelte.js'
   import { buildSections } from './lib/schema.js'
   import Section from './lib/Section.svelte'
   import Startup from './lib/Startup.svelte'
@@ -23,7 +23,9 @@
   {#if popup}<SectionPopup section={popup} />{/if}
 {/if}
 
-{#if app.ready && get('ui.mocap_view', 'off') !== 'off'}
+{#if app.ready}
+  <!-- Always mounted: the window owns the persistent webcam/skeleton layers.
+       Modes only show/hide it (no mount/unmount, no stream reconnect). -->
   <MocapWindow />
 {/if}
 

@@ -1055,16 +1055,33 @@
   }
 
   function suppressNativeCameraPreview() {
-    // Avoid a duplicate native preview if a future/native renderer happens to
-    // honour the legacy flag. Our DOM preview is the single source of truth.
+    // Avoid a duplicate native preview. The legacy flag hides the renderer's own
+    // preview; when the native renderer already materialized the node, hide the
+    // element itself — the old code skipped HTMLElements and left it on screen.
     try {
       const display = window.MMD_SA_options?.user_camera?.display;
-      if (display?.video && !(display.video instanceof HTMLElement)) display.video.hidden = true;
+      const node = display?.video;
+      if (node instanceof HTMLElement) {
+        node.hidden = true;
+        node.style.setProperty('display', 'none', 'important');
+      } else if (node) {
+        node.hidden = true;
+      }
     } catch (e) {}
   }
 
   function bindWebcamPreviewStream() {
     const video = webcamPreviewNode();
+    // The movable mocap window renders the webcam through the MJPEG pipe, not
+    // this DOM <video>. Showing it while the window owns the view leaks a stray
+    // floating preview whenever the window host is not mounted (visibility
+    // 'auto' with tracking off, or before the panel renders), because
+    // updateMocapWindow() early-returns without hiding it.
+    if (mocapWindowActive()) {
+      video.hidden = true;
+      try { video.pause(); } catch (e) {}
+      return false;
+    }
     const track = activeVideoTrack();
     if (!track || track.readyState !== 'live' || track.enabled === false || cameraSoftStopped) {
       video.hidden = true;
@@ -1111,6 +1128,13 @@
     visible = !!visible;
     const video = webcamPreviewNode();
     suppressNativeCameraPreview();
+    // The mocap window owns the webcam view (MJPEG pipe); never let the
+    // duplicate DOM preview show over the avatar while it is active.
+    if (mocapWindowActive()) {
+      video.hidden = true;
+      try { video.pause(); } catch (e) {}
+      return false;
+    }
     if (!visible) {
       video.hidden = true;
       try { video.pause(); } catch (e) {}
@@ -1155,20 +1179,16 @@
 
   function applyMocapWireframeVisibility() {
     const windowed = mocapWindowActive();
-    // The skeleton canvases must be RENDERABLE (like the old on-stage overlay
-    // did when tracking): reveal them when the window owns the view. When the
-    // window is off, hide them. On-stage suppression is handled separately by
-    // reparenting the layer into the window and by the layer CSS, not by
-    // hiding the canvases.
-    setPreviewVisibility('wireframe', !!windowed, { remember: false });
     document.body?.classList.remove('xra-tracking-on');
     document.body?.classList.add('xra-wireframe-off');
     if (windowed) {
-      if (config.ui?.mocap_view === 'both' || config.ui?.mocap_view === 'video') {
-        try { bindWebcamPreviewStream(); } catch (e) {}
-      }
+      // The window owns the view: control the reparented DOM canvases only
+      // (updateMocapWindow does that). Do NOT flip the native display.wireframe
+      // flag here — the native renderer can treat a pipeline-flag change as a
+      // restart trigger, and the skeleton data is already available to render.
       updateMocapWindow();
     } else {
+      setPreviewVisibility('wireframe', false, { remember: false });
       try { setWebcamPreviewVisible(config.ui?.preview_video === true); } catch (e) {}
     }
     return false;
@@ -1236,7 +1256,8 @@
     mocapStage.style.width = vw + 'px';
     mocapStage.style.height = vh + 'px';
     // 'Webcam only' hides the skeleton layer; every other mode shows it.
-    mocapStage.classList.toggle('xra-hide-skeleton', config.ui?.mocap_view === 'video');
+    const hideSkeleton = config.ui?.mocap_view === 'video';
+    mocapStage.classList.toggle('xra-hide-skeleton', hideSkeleton);
     const vr = cameraRectOrDefault();
     const W = host.clientWidth || 1, H = host.clientHeight || 1;
     const k = Math.min(W / vr.w, H / vr.h) || 1;
@@ -1264,6 +1285,14 @@
       // native on-stage layout syncs — which never happens in native mode.
       // Reparenting shows the real canvas, so clear it and force visible.
       node.classList.remove('xra-mocap-wireframe-pending');
+      if (hideSkeleton) {
+        // 'Webcam only': the inline display below would otherwise beat the
+        // .xra-hide-skeleton stylesheet rule (inline !important wins), so hide
+        // the canvas explicitly here instead of forcing it visible.
+        node.hidden = true;
+        node.style.setProperty('display', 'none', 'important');
+        continue;
+      }
       node.hidden = false;
       node.style.setProperty('visibility', 'visible', 'important');
       node.style.setProperty('display', 'block', 'important');
@@ -1306,13 +1335,25 @@
       mocapCamImg.style.setProperty('width', vr.w + 'px', 'important');
       mocapCamImg.style.setProperty('height', vr.h + 'px', 'important');
       mocapCamImg.style.removeProperty('display');
+      // Subscribe to the raw-frame pipe only while a webcam view is open. The
+      // enable POST must complete before the <img> opens the stream, so chain
+      // the src onto it. If we already hold the subscription but the <img> lost
+      // its src (e.g. after a stop/restart), re-open it.
       if (!mocapCamPreviewOn) {
         mocapCamPreviewOn = true;
         setMocapCameraPreview(true).then(() => {
-          if (mocapCamImg) mocapCamImg.src = '/__xra_camera.mjpg?t=' + Date.now();
+          if (mocapCamImg && !mocapCamImg.src) {
+            mocapCamImg.src = '/__xra_camera.mjpg?t=' + Date.now();
+          }
         });
+      } else if (!mocapCamImg.src) {
+        mocapCamImg.src = '/__xra_camera.mjpg?t=' + Date.now();
       }
     } else {
+      // Skeleton-only / off: unsubscribe from the frame pipe so the backend
+      // stops buffering/sending frames. This only toggles the preview buffer —
+      // it never touches the capture device. Re-entering a webcam view
+      // re-subscribes.
       mocapCamImg.style.setProperty('display', 'none', 'important');
       if (mocapCamPreviewOn) {
         mocapCamPreviewOn = false;
@@ -1329,9 +1370,8 @@
       mocapStage.className = 'xra-mocap-stage';
     }
     if (mocapStage.parentElement !== container) container.appendChild(mocapStage);
-    if (config.ui?.mocap_view === 'both' || config.ui?.mocap_view === 'video') {
-      try { bindWebcamPreviewStream(); } catch (e) {}
-    }
+    // The webcam feed in the window is the MJPEG <img>; do not bind the DOM
+    // preview stream here or it can outlive an unmounted window host.
     try { XRA.ensureMocapWireframeLayer?.(); } catch (e) {}
     const layerEl = document.getElementById('XRA_MOCAP_WIREFRAME_LAYER');
     if (layerEl && layerEl.parentElement !== mocapStage) mocapStage.appendChild(layerEl);
@@ -1346,12 +1386,15 @@
     if (video && mocapStage && video.parentElement === mocapStage) document.body.appendChild(video);
     const layerEl = document.getElementById('XRA_MOCAP_WIREFRAME_LAYER');
     if (layerEl && mocapStage && layerEl.parentElement === mocapStage) document.body.appendChild(layerEl);
-    if (mocapCamPreviewOn) {
-      mocapCamPreviewOn = false;
-      try { if (mocapCamImg) mocapCamImg.src = ''; } catch (e) {}
-      setMocapCameraPreview(false);
+    // Park the MJPEG <img> on <body>, hidden. The element and its stream stay
+    // alive (and the backend frame pipe stays on) so a later view switch just
+    // re-parents + unhides it instead of reconnecting/reopening.
+    if (mocapCamImg) {
+      try { mocapCamImg.style.setProperty('display', 'none', 'important'); } catch (e) {}
+      if (mocapCamImg.parentElement && mocapCamImg.parentElement !== document.body) {
+        document.body.appendChild(mocapCamImg);
+      }
     }
-    mocapCamImg = null;
     if (mocapStage) mocapStage.remove();
     mocapStage = null;
     document.body.classList.remove('xra-mocap-windowed');
@@ -1400,10 +1443,9 @@
     }
     else if (kind === 'wireframe') {
       if (remember) config.ui.preview_wireframe = visible;
-      const display = window.MMD_SA_options?.user_camera?.display;
-      if (display?.wireframe && !(display.wireframe instanceof HTMLElement)) {
-        try { display.wireframe.hidden = !visible; } catch (e) {}
-      }
+      // DOM-only: control the reparented wireframe canvas layer. NEVER write
+      // the native display.wireframe flag here — the renderer treats it as the
+      // mocap pipeline switch and disconnects/reopens the camera device.
       const nativeNode = nativeDisplayNode('wireframe');
       if (nativeNode) setElementVisible(nativeNode, visible, /(wire|pose|mocap|landmark|preview)/i);
       XRA.ensureMocapWireframeLayer?.();
@@ -1959,6 +2001,15 @@
       video.hidden = true;
       video.pause?.();
     } catch (e) {}
+    // Only now is the frame pipe actually torn down (not on view switches).
+    if (mocapCamPreviewOn) {
+      mocapCamPreviewOn = false;
+      setMocapCameraPreview(false);
+    }
+    if (mocapCamImg) {
+      try { mocapCamImg.src = ''; } catch (e) {}
+      mocapCamImg.style.setProperty('display', 'none', 'important');
+    }
   });
   events.on('camera-started', () => {
     if (config.ui?.preview_video === true) setWebcamPreviewVisible(true);
