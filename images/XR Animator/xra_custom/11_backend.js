@@ -868,14 +868,18 @@
     const out = {
       type: 'capture',
       action: 'configure',
-      index: cameraState.index,
-      device: cameraState.device,
-      width: cameraState.width,
-      height: cameraState.height,
       fps: cameraState.fps,
       selfie_mode: cameraState.selfieMode,
       mocap_mode: cameraState.mocapMode,
     };
+    // index/device/geometry are sent ONLY when this request explicitly carries
+    // them. Otherwise a stale cached value (e.g. the previous device path)
+    // would override a legitimate index switch, or re-stamp the geometry and
+    // oscillate it against the user/config resolution.
+    if (Number.isFinite(Number(extra.index))) out.index = cameraState.index;
+    if (extra.device != null) out.device = cameraState.device;
+    if (Number.isFinite(Number(extra.width))) out.width = cameraState.width;
+    if (Number.isFinite(Number(extra.height))) out.height = cameraState.height;
     if (cameraState.inferMode != null) out.infer_mode = cameraState.inferMode;
     if (cameraState.inferWidth != null) out.infer_width = cameraState.inferWidth;
     if (cameraState.inferHeight != null) out.infer_height = cameraState.inferHeight;
@@ -885,6 +889,7 @@
   }
 
   async function configure(extra = {}) {
+    globalThis.XRA?.cameraDeviceTrace?.('ws.configure', extra);
     cameraState.lastCommand = 'configure';
     cameraState.lastCommandAt = Date.now();
     await ensureControlConnected();
@@ -893,6 +898,7 @@
   }
 
   async function start(extra = {}) {
+    globalThis.XRA?.cameraDeviceTrace?.('ws.start', extra);
     if (!externalBackendActive()) throw new Error('Select an external mocap backend before starting Python camera');
     cameraState.wanted = true;
     cameraState.paused = false;
@@ -949,6 +955,7 @@
   }
 
   async function stop() {
+    globalThis.XRA?.cameraDeviceTrace?.('ws.stop', {});
     cameraState.wanted = false;
     cameraState.paused = false;
     cameraState.lastCommand = 'stop';

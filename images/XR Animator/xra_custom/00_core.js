@@ -611,14 +611,34 @@
     // Mocap wireframe follows tracking: hidden at startup and while tracking is
     // off. 'Off' (false) hides it entirely; anything else shows it only while
     // the camera/streamer is running.
-    nativeConfig.user_camera.display.wireframe.hidden =
+    // NOTE: the renderer treats display.wireframe.hidden as the mocap pipeline
+    // switch (it will disconnect/reopen the camera). Only write it when it
+    // actually flips, so incidental profile saves — e.g. a mocap-view switch —
+    // never reboot the device. The in-window skeleton is a DOM (canvas) toggle.
+    const nextWireframeHidden =
       !(config.ui?.preview_wireframe !== false && !!XRA.nativeBridge?.cameraRunning?.());
+    if (nativeConfig.user_camera.display.wireframe.hidden !== nextWireframeHidden) {
+      nativeConfig.user_camera.display.wireframe.hidden = nextWireframeHidden;
+    }
     if (typeof config.ui?.preview_debug === 'boolean')
       nativeConfig.user_camera.ML_models.debug_hidden = !config.ui.preview_debug;
 
     nativeConfig.user_camera.pixel_limit.disabled = false;
-    nativeConfig.user_camera.pixel_limit.current = [Number(config.camera.width) || 640, Number(config.camera.height) || 360];
-    nativeConfig.user_camera.fps = { ideal: Number(config.camera.fps) || 30 };
+    // Only write device geometry/rate when they actually changed. This function
+    // runs on EVERY profile save (including mocap-view switches and toggles);
+    // writing the native device config unconditionally makes the renderer
+    // re-apply/reopen the camera for unrelated UI actions.
+    const nextGeometry = XRA.captureGeometry(config);
+    const currentGeometry = nativeConfig.user_camera.pixel_limit.current;
+    if (!Array.isArray(currentGeometry)
+        || Number(currentGeometry[0]) !== nextGeometry[0]
+        || Number(currentGeometry[1]) !== nextGeometry[1]) {
+      nativeConfig.user_camera.pixel_limit.current = nextGeometry;
+    }
+    const nextFps = Number(config.camera.fps) || 30;
+    if (Number(nativeConfig.user_camera.fps?.ideal) !== nextFps) {
+      nativeConfig.user_camera.fps = { ideal: nextFps };
+    }
 
     nativeConfig.user_camera.ML_models.pose.model_quality = config.pose_model;
 

@@ -187,8 +187,9 @@
       cameraSelect.disabled = true;
       try {
         const preference = { deviceId: option.value, label: option.dataset.label || option.textContent };
-        if (XRA.nativeBridge.cameraRunning()) await XRA.nativeBridge.switchCamera(preference);
-        else await XRA.nativeBridge.setCameraPreference(preference);
+        const camIntent = XRA.withCameraIntent || ((_, fn) => fn());
+        if (XRA.nativeBridge.cameraRunning()) await camIntent('config', () => XRA.nativeBridge.switchCamera(preference));
+        else await camIntent('config', () => XRA.nativeBridge.setCameraPreference(preference));
         renderCameraState();
       }
       catch (e) { renderCameraState('Error · ' + e.message); }
@@ -315,7 +316,9 @@
           if (XRA.xraBackend?.waitUntilReady) {
             await XRA.xraBackend.waitUntilReady(6000).catch(() => {});
           }
-          await XRA.nativeBridge?.startNativeStreamer?.();
+          await (XRA.withCameraIntent
+            ? XRA.withCameraIntent('tracking', () => XRA.nativeBridge?.startNativeStreamer?.())
+            : XRA.nativeBridge?.startNativeStreamer?.());
         } catch (e) {
           if (!globalThis.XRA_CAMERA_OWNERSHIP?.isOwnershipError?.(e)) {
             console.warn(TAG, 'Auto-starting camera on START failed', e);

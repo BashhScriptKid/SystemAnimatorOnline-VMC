@@ -11,6 +11,50 @@
   let cameraChain = Promise.resolve();
   let cameraBusy = '';
   let cameraSoftStopped = false;
+
+  // ---- Camera device access control ---------------------------------------
+  // Opening / closing / reconfiguring the capture device is only legal from two
+  // intents: the tracking toggle ('tracking') and a settings panel ('config').
+  // Every other caller — mocap-view switches, preview visibility, layout sync,
+  // watchers — is refused, so incidental UI work can never restart the webcam.
+  // Callers declare intent via XRA.withCameraIntent('tracking'|'config', fn).
+  let cameraIntent = '';
+  function withCameraIntent(intent, fn) {
+    const previous = cameraIntent;
+    cameraIntent = intent;
+    let result;
+    try { result = fn(); }
+    catch (error) { cameraIntent = previous; throw error; }
+    // Keep the intent for the whole async operation so internal follow-up
+    // calls (a restart's stop+start, start's configure) stay authorized.
+    if (result && typeof result.then === 'function') {
+      return result.finally(() => { cameraIntent = previous; });
+    }
+    cameraIntent = previous;
+    return result;
+  }
+  // Diagnostic hook: prints EVERY camera-device touchpoint with a JS stack so
+  // the caller of a spurious camera reboot is unambiguous in the console.
+  function cameraDeviceTrace(op, detail) {
+    try {
+      const payload = detail === undefined ? '' : JSON.stringify(detail);
+      const stack = String(new Error().stack || '')
+        .split('\n').slice(2, 7)
+        .map(line => line.trim().replace(/^at\s+/, ''))
+        .join(' | ');
+      console.info(`[XRA CAMDEV] ${op} ${payload} @ ${stack}`);
+    } catch (e) {}
+  }
+  XRA.cameraDeviceTrace = cameraDeviceTrace;
+
+  function cameraDeviceAllowed(op) {
+    cameraDeviceTrace(op, { intent: cameraIntent || 'none', allowed: cameraIntent === 'tracking' || cameraIntent === 'config' });
+    if (cameraIntent === 'tracking' || cameraIntent === 'config') return true;
+    console.warn(TAG, `refused camera device op "${op}": only the tracking toggle and config panels may change the camera.`);
+    return false;
+  }
+  XRA.withCameraIntent = withCameraIntent;
+  XRA.cameraDeviceAllowed = cameraDeviceAllowed;
   function cameraDebugState() {
     const active = activeCamera();
     const health = previewHealth();
@@ -1966,6 +2010,10 @@
     const XRA = globalThis.XRA;
     const config = XRA?.config || XRA?.profile?.custom || {};
     const bridge = XRA?.nativeBridge;
+    // Camera-device gate lives in the main bridge IIFE; reach it via XRA.
+    const deviceAllowed = (op) => (typeof XRA.cameraDeviceAllowed === 'function'
+      ? XRA.cameraDeviceAllowed(op)
+      : true);
     if (!bridge) {
       if (attempt < 100) setTimeout(() => install(attempt + 1), 25);
       return;
@@ -2342,6 +2390,9 @@
 
     let startingNativeStreamer = null;
     bridge.startNativeStreamer = function (...args) {
+      if (!deviceAllowed('startNativeStreamer')) {
+        return Promise.resolve(external() ? externalActiveCamera() : null);
+      }
       if (!external()) return original.startNativeStreamer?.apply(this, args);
       if (startingNativeStreamer) return startingNativeStreamer;
       startingNativeStreamer = (async () => {
@@ -2390,9 +2441,14 @@
             const [w, h] = inferMode.split('x').map(Number);
             if (w > 0 && h > 0) { inferW = w; inferH = h; }
           }
+          // Use the SAME resolver as the config path so start and
+          // applyCameraSettings can never disagree and reopen the device.
+          const [startCamW, startCamH] = (typeof XRA.captureGeometry === 'function')
+            ? XRA.captureGeometry(cfg)
+            : [Number(cfg?.camera?.width) || 640, Number(cfg?.camera?.height) || 360];
           await api().configure({
-            width: Number(cfg?.camera?.width) || 640,
-            height: Number(cfg?.camera?.height) || 480,
+            width: startCamW,
+            height: startCamH,
             fps: captureFps,
             selfie_mode: selfieMode,
             mocap_mode: String(cfg?.performance?.tracking_pipeline || '').toUpperCase() === 'FACE' ? 'face' : 'holistic',
@@ -2424,6 +2480,9 @@
       return !!status.running && !status.paused;
     };
     bridge.restartNativeStreamer = async function (...args) {
+      if (!deviceAllowed('restartNativeStreamer')) {
+        return external() ? externalActiveCamera() : null;
+      }
       if (external() || isPythonCameraRunning()) {
         await bridge.stopNativeStreamer();
         await new Promise(resolve => setTimeout(resolve, 100));
@@ -2432,6 +2491,7 @@
       return original.restartNativeStreamer?.apply(this, args);
     };
     bridge.stopNativeStreamer = async function (...args) {
+      if (!deviceAllowed('stopNativeStreamer')) return true;
       if (external() || isPythonCameraRunning()) {
         if (activeCalSession) {
           activeCalSession.abort();
@@ -2476,16 +2536,19 @@
       return externalActiveCamera();
     }
     bridge.setCameraPreference = async function (preference = {}) {
+      if (!deviceAllowed('setCameraPreference')) return externalActiveCamera?.() ?? null;
       return external()
         ? configurePreference(preference, false)
         : original.setCameraPreference?.call(this, preference);
     };
     bridge.switchCamera = async function (preference = {}) {
+      if (!deviceAllowed('switchCamera')) return externalActiveCamera?.() ?? null;
       return external()
         ? configurePreference(preference, true)
         : original.switchCamera?.call(this, preference);
     };
     bridge.applyCameraConstraintsSafe = async function (constraints, options = {}) {
+      if (!deviceAllowed('applyCameraConstraintsSafe')) return true;
       if (!external()) return original.applyCameraConstraintsSafe?.call(this, constraints, options);
       // Browser-stream constraints (often 1920x1080/60) are unrelated to the
       // Python capture path. Forwarding them silently overrode the lightweight
@@ -2493,6 +2556,7 @@
       return true;
     };
     bridge.ensureCameraHealthy = async function (options = {}) {
+      if (!deviceAllowed('ensureCameraHealthy')) return false;
       if (!external()) return original.ensureCameraHealthy?.call(this, options);
       const status = capture();
       return !!status.running && !status.paused

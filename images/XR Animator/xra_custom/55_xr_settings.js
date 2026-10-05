@@ -686,12 +686,13 @@
       status.textContent = `Switching to ${option.dataset.label || option.textContent}…`;
       try {
         const label = option.dataset.label || option.textContent.replace(/\s+● ACTIVE$/, '');
+        const camIntent = XRA.withCameraIntent || ((_, fn) => fn());
         // If webcam is off, only remember the device. Start remains explicit.
         if (XRA.nativeBridge.cameraRunning?.()) {
-          await XRA.nativeBridge.switchCamera({ deviceId: option.value, label });
+          await camIntent('config', () => XRA.nativeBridge.switchCamera({ deviceId: option.value, label }));
         }
         else {
-          await XRA.nativeBridge.setCameraPreference({ deviceId: option.value, label });
+          await camIntent('config', () => XRA.nativeBridge.setCameraPreference({ deviceId: option.value, label }));
         }
       }
       catch (e) { status.textContent = 'Switch failed: ' + e.message; }
@@ -700,7 +701,8 @@
 
     row(box.body, 'Webcam device', cameraSelect, {
       reset: async () => {
-        await XRA.nativeBridge.setCameraPreference({ deviceId: '', label: '' });
+        const camIntent = XRA.withCameraIntent || ((_, fn) => fn());
+        await camIntent('config', () => XRA.nativeBridge.setCameraPreference({ deviceId: '', label: '' }));
         await refreshCameras(false);
       },
       isDefault: () => !(config.devices?.camera_device_id || config.devices?.camera_label),
@@ -750,7 +752,9 @@
       try {
         if (live) {
           status.textContent = 'Stopping webcam…';
-          await XRA.nativeBridge.stopNativeStreamer();
+          await (XRA.withCameraIntent
+            ? XRA.withCameraIntent('config', () => XRA.nativeBridge.stopNativeStreamer())
+            : XRA.nativeBridge.stopNativeStreamer());
         } else {
           status.textContent = 'Starting webcam…';
           if (typeof XRA.whenNativeReady === 'function') {
@@ -759,7 +763,9 @@
           if (XRA.xraBackend?.waitUntilReady) {
             await XRA.xraBackend.waitUntilReady(6000).catch(() => {});
           }
-          await XRA.nativeBridge?.startNativeStreamer?.();
+          await (XRA.withCameraIntent
+            ? XRA.withCameraIntent('config', () => XRA.nativeBridge?.startNativeStreamer?.())
+            : XRA.nativeBridge?.startNativeStreamer?.());
           XRA.ui?.refresh?.();
         }
       } catch (e) {
@@ -785,7 +791,9 @@
         if (XRA.xraBackend?.waitUntilReady) {
           await XRA.xraBackend.waitUntilReady(6000).catch(() => {});
         }
-        await XRA.nativeBridge.restartNativeStreamer();
+        await (XRA.withCameraIntent
+          ? XRA.withCameraIntent('config', () => XRA.nativeBridge.restartNativeStreamer())
+          : XRA.nativeBridge.restartNativeStreamer());
         XRA.ui?.refresh?.();
       } catch (e) {
         if (!globalThis.XRA_CAMERA_OWNERSHIP?.isOwnershipError?.(e)) {

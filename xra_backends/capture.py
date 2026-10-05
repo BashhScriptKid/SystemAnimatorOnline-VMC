@@ -124,6 +124,24 @@ except (TypeError, ValueError):
 
 
 
+def _camera_device_trace(action: str, detail: str = "") -> None:
+    """Loud console hook for every camera-device open/close/reconfigure.
+
+    Prints the Python call chain so an unexpected device restart names its
+    trigger (which handler/thread drove it).
+    """
+    try:
+        import traceback
+
+        frames = traceback.extract_stack()[:-1]
+        chain = " <- ".join(
+            f"{Path(f.filename).name}:{f.lineno}:{f.name}" for f in frames[-8:]
+        )
+        print(f"[XRA CAMDEV] {action} {detail} | {chain}", flush=True)
+    except Exception:
+        pass
+
+
 def _find_ffmpeg() -> Optional[str]:
     for name in ("ffmpeg", "/usr/bin/ffmpeg", "/usr/local/bin/ffmpeg", "/snap/bin/ffmpeg"):
         found = shutil.which(name)
@@ -1228,6 +1246,7 @@ class CaptureSource:
                 self._tracking_log_dropped += 1
 
     def start(self) -> None:
+        _camera_device_trace("START", f"device={self._device} {self._width}x{self._height}")
         if self._tracking_log_enabled:
             self._start_tracking_log()
         with self._lock:
@@ -1256,6 +1275,7 @@ class CaptureSource:
             self._thread.start()
 
     def stop(self) -> None:
+        _camera_device_trace("STOP", f"device={self._device}")
         self._stop.set()
         self._paused.clear()
         self._subscribers_changed.set()
@@ -1385,6 +1405,11 @@ class CaptureSource:
                 with self._lock:
                     self._mocap_mode = previous_mode or "holistic"
                 raise RuntimeError(mode_result.get("error") or "mocap mode switch failed")
+        _camera_device_trace(
+            "CONFIGURE",
+            f"reopen={needs_reopen} geom={self._width}x{self._height} "
+            f"infer={self._infer_mode} mode={self._mocap_mode}",
+        )
         if needs_reopen:
             self._reopen.set()
         self._subscribers_changed.set()
@@ -4490,6 +4515,7 @@ class CaptureSource:
             fps = self._target_fps
         if self._grabber is not None:
             return self._grabber
+        _camera_device_trace("OPEN", f"device={device} {width}x{height}")
         grabber = _make_grabber(device, width, height, fps=fps)
         if not grabber.available:
             self._set_error(f"camera backend unavailable ({grabber.name} {device})")
@@ -4511,6 +4537,7 @@ class CaptureSource:
         grabber, self._grabber = self._grabber, None
         self._available = False
         if grabber is not None:
+            _camera_device_trace("RELEASE", f"device={getattr(grabber, 'device', self._device)}")
             try:
                 grabber.release()
             except Exception:

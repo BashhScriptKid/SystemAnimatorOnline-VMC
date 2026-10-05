@@ -163,8 +163,11 @@ function withTimeout(promise, ms, label) {
 export async function startTracking({ timeout = 12000, dataTimeout = 8000 } = {}) {
   const nb = window.XRA?.nativeBridge
   if (!nb?.startNativeStreamer) throw new Error('native bridge unavailable')
+  const startCamera = () => (window.XRA?.withCameraIntent
+    ? window.XRA.withCameraIntent('tracking', () => nb.startNativeStreamer())
+    : nb.startNativeStreamer())
   try {
-    await withTimeout(nb.startNativeStreamer(), timeout, 'Camera start')
+    await withTimeout(startCamera(), timeout, 'Camera start')
     const deadline = performance.now() + dataTimeout
     while (performance.now() < deadline) {
       if (nb.cameraDataReady?.()) return true
@@ -181,8 +184,11 @@ export async function startTracking({ timeout = 12000, dataTimeout = 8000 } = {}
 export async function stopTracking({ timeout = 8000 } = {}) {
   const nb = window.XRA?.nativeBridge
   if (!nb?.stopNativeStreamer) return
+  const stopCamera = () => (window.XRA?.withCameraIntent
+    ? window.XRA.withCameraIntent('tracking', () => nb.stopNativeStreamer())
+    : nb.stopNativeStreamer())
   try {
-    await withTimeout(nb.stopNativeStreamer(), timeout, 'Camera stop')
+    await withTimeout(stopCamera(), timeout, 'Camera stop')
   } catch (e) {
     try { await nb.forceStopCamera?.() } catch (_) {}
     throw e

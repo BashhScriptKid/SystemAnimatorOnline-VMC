@@ -260,38 +260,15 @@ def save_profile(profile, rotate_backup=True):
 
         tmp.replace(PROFILE_FILE)
 
+    # Persisting a profile must NOT touch the capture device. The camera is
+    # opened/configured only by the tracking toggle and the settings panels (over
+    # the control WebSocket). This handler runs on every client save, so applying
+    # device geometry here produced a configure/reopen storm (including geometry
+    # oscillation against the WS config path).
     try:
-        from xra_backends import capture as backend_capture
+        from xra_backends import engine as backend_engine
         perf = (profile.get("custom") or {}).get("performance") or {}
-        fps = perf.get("pose_fps")
-        cam = (profile.get("custom") or {}).get("camera") or {}
-        cam_w = cam.get("width")
-        cam_h = cam.get("height")
-        tracking_pipeline = str(perf.get("tracking_pipeline") or "").upper()
-        infer_mode = perf.get("infer_mode")
-        infer_w = perf.get("infer_width")
-        infer_h = perf.get("infer_height")
-        inference_headroom = perf.get("inference_headroom")
-        kwargs = {}
-        if fps is not None:
-            kwargs["fps"] = float(fps)
-        if cam_w is not None:
-            kwargs["width"] = int(cam_w)
-        if cam_h is not None:
-            kwargs["height"] = int(cam_h)
-        if infer_mode is not None:
-            kwargs["infer_mode"] = infer_mode
-        if infer_w is not None and infer_h is not None:
-            kwargs["infer_width"] = int(infer_w)
-            kwargs["infer_height"] = int(infer_h)
-        if inference_headroom is not None:
-            kwargs["inference_headroom"] = float(inference_headroom)
         tracking = (profile.get("custom") or {}).get("tracking") or {}
-        if "arm_steady_hold" in tracking:
-            kwargs["arm_steady_hold"] = bool(tracking["arm_steady_hold"])
-        kwargs["mocap_mode"] = "face" if tracking_pipeline == "FACE" else "holistic"
-        if kwargs:
-            backend_capture.CAPTURE.configure(**kwargs)
         if backend_engine and backend_engine.ENGINE:
             conf_kw = {}
             if "min_joint_confidence" in perf:
@@ -309,28 +286,11 @@ def load_profile():
         try:
             p = read_profile_file(PROFILE_FILE)
             try:
-                from xra_backends import capture as backend_capture
                 from xra_backends import engine as backend_engine
                 perf = (p.get("custom") or {}).get("performance") or {}
                 tracking = (p.get("custom") or {}).get("tracking") or {}
-                pipe = str(perf.get("tracking_pipeline") or "").upper()
-                fps = perf.get("pose_fps")
-                infer_mode = perf.get("infer_mode")
-                infer_w = perf.get("infer_width")
-                infer_h = perf.get("infer_height")
-                kw = {"mocap_mode": "face" if pipe == "FACE" else "holistic"}
-                if fps is not None:
-                    kw["fps"] = float(fps)
-                if infer_mode is not None:
-                    kw["infer_mode"] = infer_mode
-                if infer_w is not None and infer_h is not None:
-                    kw["infer_width"] = int(infer_w)
-                    kw["infer_height"] = int(infer_h)
-                if "inference_headroom" in perf:
-                    kw["inference_headroom"] = float(perf["inference_headroom"])
-                if "arm_steady_hold" in tracking:
-                    kw["arm_steady_hold"] = bool(tracking["arm_steady_hold"])
-                backend_capture.CAPTURE.configure(**kw)
+                # Reading a profile must NOT touch the capture device; the
+                # tracking toggle / settings panels own the camera config.
                 if backend_engine and backend_engine.ENGINE:
                     conf_kw = {}
                     if "min_joint_confidence" in perf:

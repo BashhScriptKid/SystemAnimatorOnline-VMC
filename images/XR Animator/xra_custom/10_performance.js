@@ -34,13 +34,37 @@
   try { controlChannel = new BroadcastChannel('XRA_CONTROL'); }
   catch (e) { console.warn(TAG, 'BroadcastChannel unavailable', e); }
 
+  // The capture device is slow to (re)query, so a device configure must only be
+  // sent when the *resolved request* actually changed. apply() also runs from
+  // algorithmic passes (MMDStarted, profile load, adaptive rates) which must be
+  // pure no-ops against the camera. Reset on start/stop so a fresh stream always
+  // re-applies.
+  let lastCameraRequestSig = '';
+  let lastInferenceRateFps = -1;
+  let lastInferenceRateAt = 0;
+  events.on('camera-started', () => { lastCameraRequestSig = ''; lastInferenceRateFps = -1; lastInferenceRateAt = 0; });
+  events.on('camera-stopped', () => { lastCameraRequestSig = ''; lastInferenceRateFps = -1; lastInferenceRateAt = 0; });
+
   function applyCameraSettings() {
     const opts = window.MMD_SA_options?.user_camera;
     if (!opts) return false;
 
+    // Parse the explicit inference resolution once.
+    const inferMode = String(config.performance?.infer_mode || 'native').trim().toLowerCase();
+    let inferW = null, inferH = null;
+    if (inferMode !== 'native') {
+      const [w, h] = inferMode.split('x').map(Number);
+      if (w > 0 && h > 0) { inferW = w; inferH = h; }
+    }
+    // 'Follow inference resolution': request the inference resolution as the
+    // camera feed directly — no separate capture-geometry check.
+    const [camWidth, camHeight] = (config.camera.follow_inference && inferW && inferH)
+      ? [inferW, inferH]
+      : XRA.captureGeometry(config);
+
     opts.pixel_limit ||= {};
     opts.pixel_limit.disabled = false;
-    opts.pixel_limit.current = [Number(config.camera.width) || 640, Number(config.camera.height) || 360];
+    opts.pixel_limit.current = [camWidth, camHeight];
     opts.fps = { ideal: Number(config.camera.fps) || 30 };
 
     if (opts.ML_models?.pose) {
@@ -50,25 +74,43 @@
     // In external mode Python owns the real webcam and runs one Holistic
     // inference for body, face and hands. Explicitly forward the user's
     // geometry and the single effective inference rate.
+    // Device changes are only legal from this config-apply path (tracking
+    // toggle and settings panels). Declare the intent so the native bridge
+    // authorizes it; every other caller is refused there.
+    const withCameraConfig = (fn) => (XRA.withCameraIntent ? XRA.withCameraIntent('config', fn) : fn());
+
+    // Signature of the device-relevant request. Deliberately excludes adaptive
+    // rates (those go through sendInferenceRates); only user/panel inputs count.
+    const requestSig = JSON.stringify({
+      w: camWidth,
+      h: camHeight,
+      camFps: Number(config.camera.fps) || 30,
+      infer: inferMode,
+      iw: inferW,
+      ih: inferH,
+      mode: config.performance?.tracking_pipeline === 'FACE' ? 'face' : 'holistic',
+      selfie: !!config.devices?.selfie_mode,
+      follow: !!config.camera.follow_inference,
+    });
+    if (requestSig === lastCameraRequestSig) return true; // no device-relevant change
+    lastCameraRequestSig = requestSig;
+
     if (XRA.xraBackend?.active === true && window.SA_bridge.backend?.configure) {
-      const fps = effectivePoseFps();
-      const inferMode = config.performance?.infer_mode || 'native';
-      let inferW = null, inferH = null;
-      if (inferMode !== 'native') {
-        const [w, h] = inferMode.split('x').map(Number);
-        if (w > 0 && h > 0) { inferW = w; inferH = h; }
-      }
-      window.SA_bridge.backend.configure({
-        width: Number(config.camera.width) || 640,
-        height: Number(config.camera.height) || 360,
-        fps,
+      globalThis.XRA?.cameraDeviceTrace?.('applyCameraSettings.configure', {
+        width: camWidth, height: camHeight, fps: effectivePoseFps(),
+        infer_mode: inferMode, mocap_mode: config.performance?.tracking_pipeline,
+      });
+      withCameraConfig(() => window.SA_bridge.backend.configure({
+        width: camWidth,
+        height: camHeight,
+        fps: effectivePoseFps(),
         mocap_mode: config.performance?.tracking_pipeline === 'FACE' ? 'face' : 'holistic',
         infer_mode: inferMode,
         infer_width: inferW,
         infer_height: inferH,
         adaptive_frame_skip: !!config.performance?.adaptive_frame_skip,
         cpu_affinity: config.performance?.cpu_affinity !== false
-      }).catch(e => console.warn(TAG, 'external camera configuration failed', e));
+      })).catch(e => console.warn(TAG, 'external camera configuration failed', e));
       return true;
     }
 
@@ -79,12 +121,12 @@
       // constraints concurrently with a restart/device switch is a common
       // source of black/vanishing webcam previews on Linux/V4L2.
       if (XRA.nativeBridge?.applyCameraConstraintsSafe) {
-        XRA.nativeBridge.applyCameraConstraintsSafe(constraints, { recover: true }).catch(e => {
+        withCameraConfig(() => XRA.nativeBridge.applyCameraConstraintsSafe(constraints, { recover: true })).catch(e => {
           console.warn(TAG, 'safe camera constraints failed', e);
         });
       }
       else if (camera?.video_track?.applyConstraints) {
-        camera.video_track.applyConstraints(constraints).catch(e => {
+        withCameraConfig(() => camera.video_track.applyConstraints(constraints)).catch(e => {
           console.warn(TAG, 'camera constraints failed', e);
         });
       }
@@ -174,18 +216,27 @@
   }
 
   function sendInferenceRates() {
+    const [camWidth, camHeight] = XRA.captureGeometry(config);
     controlChannel?.postMessage({
       type: 'mocap_rates',
       pose_fps: effectivePoseFps(),
       hand_fps: effectiveHandFps(),
       camera: {
-        width: Number(config.camera.width || 640),
-        height: Number(config.camera.height || 480),
+        width: camWidth,
+        height: camHeight,
         fps: effectivePoseFps()
       }
     });
     if (XRA.xraBackend?.active === true && window.SA_bridge.backend?.configure) {
       const fps = effectivePoseFps();
+      // Adaptive rate is algorithmic: coalesce it so it never hammers the
+      // device with tiny ±2 Hz steps. Only push a meaningful change (>=3 Hz),
+      // and at most once every 2 s. Device geometry is never sent here.
+      const now = performance.now();
+      if (fps === lastInferenceRateFps) return;
+      if (Math.abs(fps - lastInferenceRateFps) < 3 && now - lastInferenceRateAt < 2000) return;
+      lastInferenceRateFps = fps;
+      lastInferenceRateAt = now;
       window.SA_bridge.backend.configure({ fps }).catch(e => {
         console.warn(TAG, 'external inference rate configuration failed', e);
       });
