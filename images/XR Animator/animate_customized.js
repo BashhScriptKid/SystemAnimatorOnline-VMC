@@ -22,6 +22,9 @@ MMD_SA_options.startup_screen = false;
   const base = toFileProtocol(Settings.f_path + '/xra_custom');
   // Tiny boot assignment keeps startup ordering deterministic without synchronous XHR.
   document.write('<script src="/__xra_boot_profile.js"></scr' + 'ipt>');
+  // Canonical backend ids/normalization; must precede the xra_custom scripts
+  // (11_backend.js) and be the same file the pose worker imports.
+  document.write('<script src="js/xra_backend_ids.js"></scr' + 'ipt>');
   document.write('<link rel="stylesheet" href="' + base + '/xra.css">');
 
   const scripts = [

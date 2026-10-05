@@ -362,7 +362,10 @@ if (is_worker) {
   try { importScripts('./SA_bridge.js'); importScripts('./SA_bridge_backend.js'); } catch (e) {
     console.error('[XRA MOCAP] failed to load SA_bridge:', e);
   }
-  // Native Python backend bridge
+  // Canonical backend ids/normalization, then the native Python backend bridge.
+  try { importScripts('./xra_backend_ids.js'); } catch (e) {
+    console.error('[XRA MOCAP] failed to load xra_backend_ids.js:', e);
+  }
   try { importScripts('./xra_backend_bridge.js'); } catch (e) {
     console.error('[XRA MOCAP] failed to load xra_backend_bridge.js:', e);
   }

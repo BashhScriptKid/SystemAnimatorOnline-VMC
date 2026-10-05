@@ -32,8 +32,11 @@
     return `${proto}//${location.host}/__xra_backend/ws`;
   };
 
-  const MEDIAPIPE_ID = 'mediapipe';  // sentinel: browser WASM disabled, Python backend owns camera
-  const DEFAULT_BACKEND = 'mediapipe-tasks-landmarker';
+  // Canonical ids live in js/xra_backend_ids.js (shared with the pose worker).
+  const BACKEND_IDS = globalThis.XRA_BACKEND_IDS || null;
+  if (!BACKEND_IDS) console.warn(TAG, 'xra_backend_ids.js not loaded; using built-in backend ids');
+  const MEDIAPIPE_ID = BACKEND_IDS ? BACKEND_IDS.SENTINEL_MEDIAPIPE : 'mediapipe';  // sentinel: browser WASM disabled, Python owns camera
+  const DEFAULT_BACKEND = BACKEND_IDS ? BACKEND_IDS.DEFAULT_BACKEND : 'mediapipe-tasks-landmarker';
 
   // The persisted choice (`performance.tracker_backend`) is the single source of
   // truth. Resolve it on every (re)connect so a reload can never silently keep a
@@ -53,6 +56,7 @@
     ready: false,
     provider: null,
     providerHuman: null,
+    contractVersion: null,
     model: null,
     capture: null,              // server-side capture source status
     serverStatus: null,
@@ -87,7 +91,7 @@
         if (d.type === 'tracker_backend_request') broadcastBackend();
       };
     }
-    catch (e) { controlChannel = null; }
+    catch { controlChannel = null; }
   }
 
   function broadcastBackend() {
@@ -95,7 +99,7 @@
     try {
       controlChannel.postMessage({ type: 'tracker_backend', value: state.selected, current: state.selected });
     }
-    catch (e) {}
+    catch {}
   }
 
   function emitStatus() {
@@ -123,6 +127,7 @@
       ready: state.ready,
       provider: state.provider,
       providerHuman: state.providerHuman,
+      contractVersion: state.contractVersion,
       model: state.model,
       modelComplexity: state.modelComplexity,
       gpuAvailable: state.serverStatus?.gpu_available ?? false,
@@ -193,12 +198,10 @@
 
   // -- WebSocket transport ----------------------------------------------------
 
+  // Desired mocap mode for the next load/connect, from the authoritative config
+  // (not from a previous server session).
   function currentMocapMode() {
     try {
-      if (typeof window !== 'undefined' && window.SA_bridge.backend?.status) {
-        const mode = window.SA_bridge.backend.status()?.mocapMode;
-        if (mode === 'face' || mode === 'holistic') return mode;
-      }
       const pipe = String(
         XRA.config?.performance?.tracking_pipeline ||
         XRA.profile?.custom?.performance?.tracking_pipeline ||
@@ -230,7 +233,7 @@
       try {
         if (ws !== socket) {
           state.staleSocketEvents++;
-          try { socket.close(1000, 'stale_socket'); } catch (e) {}
+          try { socket.close(1000, 'stale_socket'); } catch {}
           return;
         }
         state.connected = true;
@@ -278,11 +281,12 @@
       }
       if (typeof event.data !== 'string') return;
       let msg;
-      try { msg = JSON.parse(event.data); } catch (e) { return; }
+      try { msg = JSON.parse(event.data); } catch { return; }
       if (msg.type === 'pose') {
         state.lastPose = msg;
         state.lastPoseAt = performance.now();
         state.framesReceived++;
+        if (msg.contract_version != null) state.contractVersion = msg.contract_version;
         emitPose(msg);
       }
       else if (msg.type === 'status') {
@@ -295,9 +299,14 @@
         else if (state.ready) {
           state.lastError = '';
         }
-        state.model = msg.model || state.model;
-        state.provider = msg.provider || state.provider;
-        state.providerHuman = msg.provider || state.providerHuman;
+        // Reflect the authoritative snapshot; never keep a stale local value
+        // when the server reports the field (no fallback-to-local retention).
+        if ('model' in msg) state.model = msg.model;
+        if ('provider' in msg) {
+          state.provider = msg.provider;
+          state.providerHuman = msg.provider;
+        }
+        if (msg.contract_version != null) state.contractVersion = msg.contract_version;
         if (msg.capture) state.capture = msg.capture;
         if (msg.model_complexity === 0 || msg.model_complexity === 1) {
           state.modelComplexity = msg.model_complexity;
@@ -391,7 +400,7 @@
 
   function disconnect() {
     if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = 0; }
-    if (ws) { try { ws.close(); } catch (e) {} ws = null; }
+    if (ws) { try { ws.close(); } catch {} ws = null; }
     state.connected = false;
     state.ready = false;
     state.socketState = 'closed_by_client';
@@ -427,7 +436,7 @@
     state.selected = next;
     // Persist immediately so the next connect() (and the boot guard) resolves to
     // the same backend and there is no selection/persistence race.
-    try { if (globalThis.XRA?.config?.performance) globalThis.XRA.config.performance.tracker_backend = next; } catch (e) {}
+    try { if (globalThis.XRA?.config?.performance) globalThis.XRA.config.performance.tracker_backend = next; } catch {}
     if (validComplexity) state.modelComplexity = modelComplexity;
     if (state.selected === MEDIAPIPE_ID) {
       // Release Python resources before closing the only control socket.
@@ -468,7 +477,7 @@
       sendControl({ type: 'hardware', mode: value });
     }
     if (controlChannel) {
-      try { controlChannel.postMessage({ type: 'tracker_hardware', value: value }); } catch (e) {}
+      try { controlChannel.postMessage({ type: 'tracker_hardware', value: value }); } catch {}
     }
     emitStatus();
   }
@@ -481,13 +490,13 @@
       sendControl({ type: 'load', model: state.selected, model_complexity: c });
     }
     if (controlChannel) {
-      try { controlChannel.postMessage({ type: 'tracker_model_complexity', value: c }); } catch (e) {}
+      try { controlChannel.postMessage({ type: 'tracker_model_complexity', value: c }); } catch {}
     }
     emitStatus();
   }
 
   function eventsEmit(name, detail) {
-    try { XRA.events?.emit?.(name, detail); } catch (e) {}
+    try { XRA.events?.emit?.(name, detail); } catch {}
   }
 
   async function listBackends() {
@@ -568,7 +577,12 @@
   const bootCamera = globalThis.XRA?.config?.camera || {};
   const bootDevices = globalThis.XRA?.config?.devices || {};
   const bootPerformance = globalThis.XRA?.config?.performance || {};
-  const cameraState = {
+
+  // Desired/intent camera settings, authored by this client (config -> commands).
+  // These are NOT the camera's actual state. For truth read `status().actual`
+  // (or the nested `status().backend.capture`), which reflects the server's
+  // authoritative capture snapshot with no client-side inference.
+  const desired = {
     index: 0,
     device: null,
     width: Math.max(160, Math.min(1920, Number(bootCamera.width) || 384)),
@@ -586,14 +600,58 @@
     lastCommandAt: 0,
   };
 
+  // Latest authoritative server capture snapshot (or null before the first
+  // status arrives). Never cached past the truth that produced it. Read through
+  // the controller's public snapshot: `state` is private to the other IIFE.
+  function captureActual() {
+    const snap = backendSnapshot();
+    return snap.capture || snap.serverStatus?.capture || null;
+  }
+
+  // Direct reflection of the authoritative camera state. Every field here is
+  // read from the server snapshot; only device/geometry fall back to the
+  // client's desired values while the snapshot is still unknown.
+  function actualCamera() {
+    const c = captureActual();
+    if (!c) {
+      return {
+        known: false,
+        running: false, paused: false, available: false, camera_open: false,
+        camera_busy: false, publishing: false,
+        device: desired.device, selfie_mode: desired.selfieMode,
+        mocap_mode: desired.mocapMode,
+        geometry: [desired.width, desired.height],
+        effective_fps: 0, subscribers: 0, last_error: '',
+      };
+    }
+    return {
+      known: true,
+      running: !!c.running,
+      paused: !!c.paused,
+      available: c.available ?? false,
+      camera_open: c.camera_open ?? false,
+      camera_busy: c.camera_busy ?? false,
+      publishing: c.publishing ?? false,
+      device: c.device ?? desired.device,
+      selfie_mode: c.selfie_mode ?? desired.selfieMode,
+      mocap_mode: (c.mocap_mode === 'face' || c.mocap_mode === 'holistic') ? c.mocap_mode : desired.mocapMode,
+      geometry: c.geometry ?? [desired.width, desired.height],
+      effective_fps: c.effective_fps ?? 0,
+      subscribers: c.subscribers ?? 0,
+      last_error: c.last_error ?? '',
+    };
+  }
+
   function externalBackendActive() {
     return globalThis.XRA?.xraBackend?.active === true;
   }
 
   function isExternalBackend(value) {
+    // Single source of truth (mirrors xra_backends/registry.py) shared with the
+    // pose worker; the fallback keeps the guard alive if the include is missing.
+    if (BACKEND_IDS) return BACKEND_IDS.isExternal(value);
     const id = String(value ?? '').trim().toLowerCase();
-    return !!id && !['mediapipe', 'mediapipe-wasm', 'mediapipe_wasm',
-      'browser', 'wasm', 'mp'].includes(id);
+    return !!id && id !== MEDIAPIPE_ID;
   }
 
   function requestsVideo(constraints) {
@@ -619,7 +677,7 @@
     }
     let stream;
     if (typeof canvas.captureStream === 'function') {
-      const tickFps = Math.max(5, Math.min(30, Number(cameraState.fps) || 20));
+      const tickFps = Math.max(5, Math.min(30, Number(desired.fps) || 20));
       stream = canvas.captureStream(tickFps);
       // A static canvas is not guaranteed to emit a frame at every
       // captureStream interval. Pulse one pixel so the legacy pose-worker
@@ -776,7 +834,7 @@
 
   function stopSyntheticStreams() {
     for (const stream of syntheticStreams) {
-      try { stream.getTracks?.().forEach(track => track.stop()); } catch (_ignored) {}
+      try { stream.getTracks?.().forEach(track => { track.stop(); }); } catch (_ignored) {}
     }
     syntheticStreams.clear();
   }
@@ -864,48 +922,48 @@
   }
 
   function normalizedConfig(extra = {}) {
-    if (Number.isFinite(Number(extra.index))) cameraState.index = Number(extra.index);
-    if (extra.device != null) cameraState.device = String(extra.device);
-    if (Number.isFinite(Number(extra.width))) cameraState.width = Math.max(160, Math.min(1920, Number(extra.width)));
-    if (Number.isFinite(Number(extra.height))) cameraState.height = Math.max(120, Math.min(1080, Number(extra.height)));
-    if (Number.isFinite(Number(extra.fps))) cameraState.fps = Math.max(5, Math.min(60, Number(extra.fps)));
-    if (Object.prototype.hasOwnProperty.call(extra, 'selfie_mode')) cameraState.selfieMode = !!extra.selfie_mode;
+    if (Number.isFinite(Number(extra.index))) desired.index = Number(extra.index);
+    if (extra.device != null) desired.device = String(extra.device);
+    if (Number.isFinite(Number(extra.width))) desired.width = Math.max(160, Math.min(1920, Number(extra.width)));
+    if (Number.isFinite(Number(extra.height))) desired.height = Math.max(120, Math.min(1080, Number(extra.height)));
+    if (Number.isFinite(Number(extra.fps))) desired.fps = Math.max(5, Math.min(60, Number(extra.fps)));
+    if (Object.prototype.hasOwnProperty.call(extra, 'selfie_mode')) desired.selfieMode = !!extra.selfie_mode;
     if (extra.mocap_mode != null) {
       const mode = String(extra.mocap_mode).trim().toLowerCase();
-      if (mode === 'face' || mode === 'holistic') cameraState.mocapMode = mode;
+      if (mode === 'face' || mode === 'holistic') desired.mocapMode = mode;
     }
-    if (extra.infer_mode != null) cameraState.inferMode = String(extra.infer_mode).trim().toLowerCase();
-    if (Number.isFinite(Number(extra.infer_width))) cameraState.inferWidth = Number(extra.infer_width);
-    if (Number.isFinite(Number(extra.infer_height))) cameraState.inferHeight = Number(extra.infer_height);
-    if (Object.prototype.hasOwnProperty.call(extra, 'adaptive_frame_skip')) cameraState.adaptiveFrameSkip = !!extra.adaptive_frame_skip;
-    if (Object.prototype.hasOwnProperty.call(extra, 'cpu_affinity')) cameraState.cpuAffinity = !!extra.cpu_affinity;
+    if (extra.infer_mode != null) desired.inferMode = String(extra.infer_mode).trim().toLowerCase();
+    if (Number.isFinite(Number(extra.infer_width))) desired.inferWidth = Number(extra.infer_width);
+    if (Number.isFinite(Number(extra.infer_height))) desired.inferHeight = Number(extra.infer_height);
+    if (Object.prototype.hasOwnProperty.call(extra, 'adaptive_frame_skip')) desired.adaptiveFrameSkip = !!extra.adaptive_frame_skip;
+    if (Object.prototype.hasOwnProperty.call(extra, 'cpu_affinity')) desired.cpuAffinity = !!extra.cpu_affinity;
     const out = {
       type: 'capture',
       action: 'configure',
-      fps: cameraState.fps,
-      selfie_mode: cameraState.selfieMode,
-      mocap_mode: cameraState.mocapMode,
+      fps: desired.fps,
+      selfie_mode: desired.selfieMode,
+      mocap_mode: desired.mocapMode,
     };
     // index/device/geometry are sent ONLY when this request explicitly carries
     // them. Otherwise a stale cached value (e.g. the previous device path)
     // would override a legitimate index switch, or re-stamp the geometry and
     // oscillate it against the user/config resolution.
-    if (Number.isFinite(Number(extra.index))) out.index = cameraState.index;
-    if (extra.device != null) out.device = cameraState.device;
-    if (Number.isFinite(Number(extra.width))) out.width = cameraState.width;
-    if (Number.isFinite(Number(extra.height))) out.height = cameraState.height;
-    if (cameraState.inferMode != null) out.infer_mode = cameraState.inferMode;
-    if (cameraState.inferWidth != null) out.infer_width = cameraState.inferWidth;
-    if (cameraState.inferHeight != null) out.infer_height = cameraState.inferHeight;
-    if (cameraState.adaptiveFrameSkip != null) out.adaptive_frame_skip = cameraState.adaptiveFrameSkip;
-    if (cameraState.cpuAffinity != null) out.cpu_affinity = cameraState.cpuAffinity;
+    if (Number.isFinite(Number(extra.index))) out.index = desired.index;
+    if (extra.device != null) out.device = desired.device;
+    if (Number.isFinite(Number(extra.width))) out.width = desired.width;
+    if (Number.isFinite(Number(extra.height))) out.height = desired.height;
+    if (desired.inferMode != null) out.infer_mode = desired.inferMode;
+    if (desired.inferWidth != null) out.infer_width = desired.inferWidth;
+    if (desired.inferHeight != null) out.infer_height = desired.inferHeight;
+    if (desired.adaptiveFrameSkip != null) out.adaptive_frame_skip = desired.adaptiveFrameSkip;
+    if (desired.cpuAffinity != null) out.cpu_affinity = desired.cpuAffinity;
     return out;
   }
 
   async function configure(extra = {}) {
     globalThis.XRA?.cameraDeviceTrace?.('ws.configure', extra);
-    cameraState.lastCommand = 'configure';
-    cameraState.lastCommandAt = Date.now();
+    desired.lastCommand = 'configure';
+    desired.lastCommandAt = Date.now();
     await ensureControlConnected();
     sendControl(normalizedConfig(extra));
     return status();
@@ -914,11 +972,11 @@
   async function start(extra = {}) {
     globalThis.XRA?.cameraDeviceTrace?.('ws.start', extra);
     if (!externalBackendActive()) throw new Error('Select an external mocap backend before starting Python camera');
-    cameraState.wanted = true;
-    cameraState.paused = false;
-    cameraState.lastError = '';
-    cameraState.lastCommand = 'start';
-    cameraState.lastCommandAt = Date.now();
+    desired.wanted = true;
+    desired.paused = false;
+    desired.lastError = '';
+    desired.lastCommand = 'start';
+    desired.lastCommandAt = Date.now();
     setPythonOwnership(true, 'camera-start');
     releaseBrowserVideoTracks('camera-start', true);
     await ensureEngineReady();
@@ -962,7 +1020,7 @@
         return null;
       }, 10000, 'Python camera start');
     } catch (error) {
-      cameraState.lastError = String(error?.message || error);
+      desired.lastError = String(error?.message || error);
       throw error;
     }
     return status();
@@ -970,10 +1028,10 @@
 
   async function stop() {
     globalThis.XRA?.cameraDeviceTrace?.('ws.stop', {});
-    cameraState.wanted = false;
-    cameraState.paused = false;
-    cameraState.lastCommand = 'stop';
-    cameraState.lastCommandAt = Date.now();
+    desired.wanted = false;
+    desired.paused = false;
+    desired.lastCommand = 'stop';
+    desired.lastCommandAt = Date.now();
     await ensureControlConnected();
     sendControl({ type: 'capture', action: 'stop' });
     // CaptureSource.stop() joins the grab/inference thread before releasing
@@ -986,26 +1044,26 @@
         return capture && capture.running === false ? capture : null;
       }, 5000, 'Python camera stop');
     } catch (error) {
-      cameraState.lastError = String(error?.message || error);
+      desired.lastError = String(error?.message || error);
       throw error;
     }
     return status();
   }
 
   async function pause() {
-    cameraState.paused = true;
-    cameraState.lastCommand = 'pause';
-    cameraState.lastCommandAt = Date.now();
+    desired.paused = true;
+    desired.lastCommand = 'pause';
+    desired.lastCommandAt = Date.now();
     await ensureControlConnected();
     sendControl({ type: 'capture', action: 'pause' });
     return status();
   }
 
   async function resume(extra = {}) {
-    cameraState.wanted = true;
-    cameraState.paused = false;
-    cameraState.lastCommand = 'resume';
-    cameraState.lastCommandAt = Date.now();
+    desired.wanted = true;
+    desired.paused = false;
+    desired.lastCommand = 'resume';
+    desired.lastCommandAt = Date.now();
     setPythonOwnership(true, 'camera-resume');
     await ensureEngineReady();
     try { backend()?.clearError?.(); } catch (_ignored) {}
@@ -1022,8 +1080,13 @@
   }
 
   function status() {
+    // Top level is a direct reflection of the authoritative server capture
+    // snapshot (truth). Client-authored intent is namespaced under `desired` so
+    // it can never be mistaken for camera state. `backend` preserves the nested
+    // controller snapshot consumers already read (status().backend.capture).
     return {
-      ...cameraState,
+      ...actualCamera(),
+      desired,
       pythonOwnsCamera,
       guardInstalled,
       browserReleased,
@@ -1084,7 +1147,7 @@
       return;
     }
     const invoke = promise => Promise.resolve(promise).catch(error => {
-      cameraState.lastError = String(error?.message || error);
+      desired.lastError = String(error?.message || error);
       console.error(TAG, error);
     });
     if (data.type === 'mocap_rates' && externalBackendActive()) {

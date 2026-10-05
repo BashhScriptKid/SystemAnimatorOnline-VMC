@@ -3,8 +3,13 @@
   if (!scope) return;
   try { scope.XRA_NATIVE?.shutdown?.(); } catch (_ignored) {}
 
-  const MEDIAPIPE_ID = 'mediapipe';
-  const DEFAULT_MODEL = 'mediapipe-tasks-landmarker';
+  const IDS = scope.XRA_BACKEND_IDS;
+  if (!IDS) {
+    console.error('[XRA POSE WS] xra_backend_ids.js not loaded; native bridge disabled');
+    return;
+  }
+  const MEDIAPIPE_ID = IDS.SENTINEL_MEDIAPIPE;
+  const DEFAULT_MODEL = IDS.DEFAULT_BACKEND;
   const CHANNEL = 'XRA_CONTROL';
   const RECONNECT_MS = 1000;
   const NAMES = [
@@ -27,6 +32,7 @@
     loading: false,
     provider: null,
     accelerated: false,
+    contractVersion: null,
     latest: null,
     sequence: 0,
     consumed: 0,
@@ -64,12 +70,6 @@
   const finite = (value, fallback = 0) => Number.isFinite(Number(value)) ? Number(value) : fallback;
   const clamp = (value, min, max) => Math.max(min, Math.min(max, finite(value)));
   const active = () => state.selected !== MEDIAPIPE_ID;
-  const normalizeModel = value => {
-    const id = String(value ?? '').trim().toLowerCase();
-    if (!id || ['wasm','browser','mp','mediapipe_wasm'].includes(id)) return MEDIAPIPE_ID;
-    if (['onnx','external','native','dwpose'].includes(id)) return DEFAULT_MODEL; // legacy profile aliases
-    return id;
-  };
   const wsUrl = () => {
     const protocol = scope.location?.protocol === 'https:' ? 'wss:' : 'ws:';
     return protocol + '//' + (scope.location?.host || '127.0.0.1:8000') + '/__xra_backend/ws';
@@ -79,8 +79,6 @@
     try { socket.send(JSON.stringify(object)); return true; }
     catch (error) { state.lastError = String(error); return false; }
   };
-  const send = object => sendOn(state.ws, object);
-
   function trace(name, detail = {}) {
     const payload = { name, at: Date.now(), ...detail };
     if (state.debug) console.info('[XRA POSE WS]', name, detail);
@@ -135,10 +133,12 @@
       state.loading = !!message.loading;
       state.provider = message.provider || null;
       state.accelerated = !!message.accelerated;
+      if (message.contract_version != null) state.contractVersion = message.contract_version;
       return;
     }
     if (message.type === 'pose') {
       state.framesReceived++;
+      if (message.contract_version != null) state.contractVersion = message.contract_version;
       state.latest = message;
       state.sequence++;
       if (message.capture_width) state.width = message.capture_width;
@@ -259,7 +259,7 @@
   }
 
   function selectBackend(value) {
-    const next = normalizeModel(value);
+    const next = IDS.normalize(value);
     if (next === state.selected) {
       state.duplicateSelections++;
       trace('backend.duplicate_selection', {
@@ -417,7 +417,7 @@
     return _POOL_POSE;
   }
 
-  function applySpatialLandmarkGuard(kp3D, kp3DRaw, kpEA, kp2D, width, height) {
+  function applySpatialLandmarkGuard(kp3D, kp3DRaw, kpEA, kp2D, width, _height) {
     if (!state.frontGuard) return;
     if (!Array.isArray(kp3D) || kp3D.length < 33) return;
 

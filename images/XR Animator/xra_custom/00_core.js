@@ -143,7 +143,7 @@
       preset: 'CUSTOM',
       master_preset: 'CUSTOM',
       tracking_pipeline: 'FULL_BODY',
-      tracker_backend: 'mediapipe-tasks-landmarker',
+      tracker_backend: (globalThis.XRA_BACKEND_IDS && globalThis.XRA_BACKEND_IDS.DEFAULT_BACKEND) || 'mediapipe-tasks-landmarker',
       min_tracking_confidence: 0.50,
       min_pose_confidence: 0.50,
       min_face_confidence: 0.50,

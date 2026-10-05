@@ -2202,16 +2202,19 @@
       }
     });
 
+    const BACKEND_IDS = globalThis.XRA_BACKEND_IDS || {};
+    const DEFAULT_BACKEND = BACKEND_IDS.DEFAULT_BACKEND || 'mediapipe-tasks-landmarker';
+    const SENTINEL_MEDIAPIPE = BACKEND_IDS.SENTINEL_MEDIAPIPE || 'mediapipe';
     const backendLabel = (id) => {
       const mode = String(XRA.config?.performance?.tracking_pipeline || '').toUpperCase();
       const isFace = mode === 'FACE';
       const names = {
-        'mediapipe-tasks-landmarker': isFace ? 'MediaPipe Tasks Face · native (52 blendshapes)' : 'MediaPipe Tasks Holistic · native (52 blendshapes)',
+        [DEFAULT_BACKEND]: isFace ? 'MediaPipe Tasks Face · native (52 blendshapes)' : 'MediaPipe Tasks Holistic · native (52 blendshapes)',
       };
       return names[id] || id;
     };
 
-    const initialBackend = 'mediapipe-tasks-landmarker';
+    const initialBackend = DEFAULT_BACKEND;
     const backendStatus = el('div', 'xra-sub', `Backend: ${backendLabel(initialBackend)}`);
 
     const renderBackendStatus = () => {
@@ -2220,7 +2223,7 @@
         backendStatus.textContent = 'Backend: non disponibile';
         return;
       }
-      if (snapshot.selected === 'mediapipe') {
+      if (snapshot.selected === SENTINEL_MEDIAPIPE) {
         backendStatus.textContent = 'Backend: MediaPipe (built-in, WASM) — attivo';
         return;
       }
