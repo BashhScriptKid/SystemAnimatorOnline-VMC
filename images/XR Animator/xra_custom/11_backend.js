@@ -551,6 +551,20 @@
   // before the UI first polls for status.
   if (state.selected !== MEDIAPIPE_ID) connect();
   eventsEmit('tracker-backend', { current: state.selected });
+
+  // Release the Python-owned camera promptly on tab close/refresh: closing the
+  // control socket lets the server detect the disconnect and stop capture
+  // instead of waiting for a socket timeout. A refresh reconnects within the
+  // server's grace window, so the camera is not stopped/started needlessly.
+  try {
+    const releaseOnUnload = (event) => {
+      // Keep the socket when the page is frozen into the back/forward cache;
+      // that keeps the server's consumer count non-zero (no auto-stop).
+      if (event && event.persisted) return;
+      try { disconnect(); } catch (e) {}
+    };
+    globalThis.addEventListener?.('pagehide', releaseOnUnload);
+  } catch (e) {}
 })();
 
 ;(() => {

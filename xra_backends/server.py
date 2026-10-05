@@ -656,6 +656,76 @@ class InferenceWorker:
         }
 _ACTIVE_WORKERS: set[InferenceWorker] = set()
 _ACTIVE_WORKERS_LOCK = threading.Lock()
+
+# -- camera auto-stop on disconnect ------------------------------------------
+# When the last browser consumer of the Python-owned camera goes away (tab
+# closed/refreshed, socket dropped), release the device so the webcam stops.
+# A short grace window absorbs a refresh (close + immediate reopen) without a
+# stop/start cycle, and other consumers (an OBS MJPEG preview) keep it alive.
+_CAMERA_AUTOSTOP_LOCK = threading.Lock()
+_CAMERA_AUTOSTOP_TIMER: Optional[threading.Timer] = None
+_CAMERA_AUTOSTOP_GEN = 0
+
+
+def _camera_autostop_ms() -> float:
+    try:
+        return max(0.0, float(os.environ.get("XRA_CAMERA_AUTOSTOP_MS", "2000")))
+    except Exception:
+        return 2000.0
+
+
+def _camera_has_consumers() -> bool:
+    with _ACTIVE_WORKERS_LOCK:
+        if _ACTIVE_WORKERS:
+            return True
+    try:
+        if capture.CAPTURE.obs_preview_client_count > 0:
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def cancel_camera_autostop() -> None:
+    """A consumer (re)connected: cancel any pending auto-stop."""
+    global _CAMERA_AUTOSTOP_TIMER, _CAMERA_AUTOSTOP_GEN
+    with _CAMERA_AUTOSTOP_LOCK:
+        _CAMERA_AUTOSTOP_GEN += 1
+        if _CAMERA_AUTOSTOP_TIMER is not None:
+            _CAMERA_AUTOSTOP_TIMER.cancel()
+            _CAMERA_AUTOSTOP_TIMER = None
+
+
+def schedule_camera_autostop() -> None:
+    """The last consumer left: stop the camera after a grace window unless one
+    reconnects first or another consumer is still active."""
+    global _CAMERA_AUTOSTOP_TIMER, _CAMERA_AUTOSTOP_GEN
+    delay = _camera_autostop_ms() / 1000.0
+    if delay <= 0.0:
+        return
+    with _CAMERA_AUTOSTOP_LOCK:
+        _CAMERA_AUTOSTOP_GEN += 1
+        generation = _CAMERA_AUTOSTOP_GEN
+        if _CAMERA_AUTOSTOP_TIMER is not None:
+            _CAMERA_AUTOSTOP_TIMER.cancel()
+
+        def _fire() -> None:
+            with _CAMERA_AUTOSTOP_LOCK:
+                if generation != _CAMERA_AUTOSTOP_GEN:
+                    return
+            if _camera_has_consumers():
+                return
+            try:
+                capture.CAPTURE.stop()
+            except Exception:
+                pass
+
+        timer = threading.Timer(delay, _fire)
+        timer.daemon = True
+        _CAMERA_AUTOSTOP_TIMER = timer
+        timer.start()
+
+
 _LATEST_TRANSPORT_STATUS: dict = {
     "connected": False,
     "rx_binary": 0,
@@ -726,6 +796,7 @@ def maybe_upgrade(handler) -> bool:
     worker = InferenceWorker(conn)
     with _ACTIVE_WORKERS_LOCK:
         _ACTIVE_WORKERS.add(worker)
+    cancel_camera_autostop()
     try:
         worker.run()
     finally:
@@ -737,6 +808,7 @@ def maybe_upgrade(handler) -> bool:
                 _LATEST_TRANSPORT_STATUS.update(latest)
             except Exception:
                 pass
+        schedule_camera_autostop()
         try:
             handler.close_connection = True
         except Exception:
