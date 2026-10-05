@@ -64,6 +64,15 @@ try {
         const sensitivity = String(d.sensitivity || 'high').toLowerCase();
         XRA_hand_detection_sensitivity = ['normal','high'].includes(sensitivity) ? sensitivity : 'high';
       }
+      else if (d.type === "hand_pose_debug") {
+        // Live bisect switch for the z-shaping heuristics in hands_adjust().
+        // Stored on the global object: this handler and hands_adjust() run in
+        // different scopes, so a bare module-level var would not be visible.
+        if (typeof d.z_fix === "boolean") {
+          const g = (typeof self !== "undefined") ? self : globalThis;
+          g.XRA_hand_z_fix_enabled = d.z_fix;
+        }
+      }
       else if (d.type === "benchmark_telemetry") {
         XRA_telemetry_enabled = !!d.value;
       }
@@ -2219,8 +2228,13 @@ const h_palm = Math.sqrt(palm_height[0]*palm_height[0] + palm_height[1]*palm_hei
 
 let _adjust_ratio = h_palm / w_palm;
 
+// z-shaping heuristics (default ON). Toggle live from the XRA_CONTROL channel
+// ({type:'hand_pose_debug', z_fix:false}); the flag lives on the global object
+// because the control handler and this function are in different module scopes.
+const XRA_z_fix = ((typeof self !== "undefined") ? self : globalThis).XRA_hand_z_fix_enabled !== false;
+
 _adjust_ratio = (_adjust_ratio < 1.25) ? 1.25 : ((_adjust_ratio > 1.75) ? 1.75 : 1);
-if (_adjust_ratio != 1) {
+if (XRA_z_fix && _adjust_ratio != 1) {
   const adjust_max = Math.max(Math.abs(palm_height[2]/h_palm), Math.abs(palm_width[2]/w_palm));
 
   const s = _adjust_ratio * _adjust_ratio;
@@ -2238,7 +2252,7 @@ s*s = ((x2*x2 + y2*y2)/1.5 - (x1*x1 + y1*y1))/(z1*z1 - z2*z2/1.5)
 
 
 const palm0 = h[0];
-for (let f_idx = 0; f_idx < 5; f_idx++) {
+for (let f_idx = 0; XRA_z_fix && f_idx < 5; f_idx++) {
   const finger = [];
   for (let idx = 0; idx < 4; idx++)
     finger[idx] = h[f_idx*4+1+idx];
