@@ -608,7 +608,11 @@ def to_wire(payload: dict, capture_hint: Optional[tuple[int, int]] = None) -> di
 
     # Step 2: kinematic distance guard on adjacent body joints (2D normalized).
     # Only run when torso_span is reliable (geometry valid, core joints present).
-    if _KIN_MAX > 0 and reason == "ok" and torso_span > 0.02 and keypoints:
+    # Run the outlier guard for partial capture too: `upper_body_only` (desk /
+    # near-camera framing) is exactly where the pose model extrapolates a limb
+    # to a hallucinated position, and `shoulders_confident` guarantees a usable
+    # torso_span here.
+    if _KIN_MAX > 0 and reason in ("ok", "upper_body_only") and torso_span > 0.02 and keypoints:
         _max_dist = torso_span * _KIN_MAX
         # Pairs: (proximal_idx, distal_idx) in BlazePose-33 order.
         _kin_pairs: list[tuple[int, int]] = [

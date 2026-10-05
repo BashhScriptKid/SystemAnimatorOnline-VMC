@@ -179,10 +179,20 @@ class OnnxHolisticEngine:
             if not res:
                 return kp, world, wrists
             _bbox, lms, lms_world, _mask, _heat, _conf = res
+            margin_x, margin_y = 0.08 * w, 0.08 * h
             for i in range(33):
                 x, y, z, vis, pres = (float(v) for v in lms[i][:5])
                 kp[i]["position"] = {"x": round(x, 2), "y": round(y, 2), "z": round(z, 2)}
-                kp[i]["score"] = round(vis, 3)
+                # Partial capture: the pose model still predicts the full body and
+                # extrapolates occluded limbs outside the frame. Suppress those so
+                # the wireframe/rig never draws a bone to a hallucinated joint; the
+                # model's own `presence` (probability the point is in frame) lets a
+                # genuine edge hand through.
+                out_of_frame = not (
+                    -margin_x <= x <= w + margin_x
+                    and -margin_y <= y <= h + margin_y
+                )
+                kp[i]["score"] = round(0.0 if (out_of_frame and pres < 0.5) else vis, 3)
             world = [{"x": round(float(p[0]), 4), "y": round(float(p[1]), 4),
                       "z": round(float(p[2]), 4), "name": _BLAZEPOSE_NAMES[i]}
                      for i, p in enumerate(lms_world[:33])]
