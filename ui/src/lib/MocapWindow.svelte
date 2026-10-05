@@ -167,6 +167,9 @@
       lastFrames = fr
       lastT = now
       readTelemetry()
+      // Periodic reconcile so the frame-pipe subscription self-heals (watchdog
+      // re-opens a stalled MJPEG <img> while a webcam view is open).
+      if (showWindow) update()
     }
     poll()
     timer = setInterval(poll, 500)

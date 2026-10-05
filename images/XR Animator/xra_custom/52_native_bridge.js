@@ -1229,13 +1229,19 @@
   let mocapStage = null;
   let mocapCamImg = null;
   let mocapCamPreviewOn = false;
+  let mocapVideoPrev = false;      // was a webcam view open on the last update?
+  let mocapCamLastFrameAt = 0;     // last time the MJPEG <img> delivered a frame
 
   // Ask the Python server to buffer/stream the camera frames it already owns
   // (the same frames OBS consumes). No-op until a preview client attaches.
   async function setMocapCameraPreview(on) {
     try {
-      await fetch('/__xra_camera/preview?on=' + (on ? 1 : 0), { cache: 'no-store' });
-    } catch (e) {}
+      const response = await fetch('/__xra_camera/preview?on=' + (on ? 1 : 0), { cache: 'no-store' });
+      const body = await response.json().catch(() => ({}));
+      console.info(`[XRA PREVIEW] preview?on=${on ? 1 : 0} -> ${response.status}`, body);
+    } catch (e) {
+      console.warn('[XRA PREVIEW] preview fetch failed', e);
+    }
   }
 
   function cameraRectOrDefault() {
@@ -1247,6 +1253,17 @@
       w: Math.min(vw, vh * 16 / 9),
       h: vh
     };
+  }
+
+  // NOTE: never test/clear the <img> via `.src`. Assigning `src = ''` makes the
+  // `.src` GETTER resolve to the document URL, so `!img.src` is always false and
+  // the browser tries to load the HTML page as an image (error loop). Use the
+  // attribute instead; removing it does not fire an error event.
+  function mocapCamHasSrc() {
+    return !!(mocapCamImg && mocapCamImg.getAttribute('src'));
+  }
+  function mocapCamClearSrc() {
+    try { if (mocapCamImg) mocapCamImg.removeAttribute('src'); } catch (e) {}
   }
 
   function updateMocapWindow() {
@@ -1311,6 +1328,20 @@
       mocapCamImg = document.createElement('img');
       mocapCamImg.className = 'xra-mocap-cam';
       mocapCamImg.alt = '';
+      mocapCamImg.addEventListener('load', () => {
+        mocapCamLastFrameAt = performance.now();
+        console.info('[XRA PREVIEW] mjpg <img> frame received');
+      });
+      mocapCamImg.addEventListener('error', () => {
+        const src = mocapCamImg.getAttribute('src');
+        console.warn('[XRA PREVIEW] mjpg <img> error', src);
+        // Ignore the spurious error from a cleared/empty src, otherwise the
+        // retry path loops forever.
+        if (!src || !mocapCamPreviewOn) return;
+        mocapCamClearSrc();
+        mocapCamPreviewOn = false;
+        setTimeout(() => { try { updateMocapWindow(); } catch (e) {} }, 500);
+      });
     }
     if (mocapCamImg.parentElement !== mocapStage) mocapStage.prepend(mocapCamImg);
 
@@ -1319,7 +1350,7 @@
       // stream, clear the canvas buffers and hide the camera image. An
       // always-on window paints black + "Tracking is off" over this.
       if (mocapCamPreviewOn) { mocapCamPreviewOn = false; setMocapCameraPreview(false); }
-      try { mocapCamImg.src = ''; } catch (e) {}
+      mocapCamClearSrc();
       mocapCamImg.style.setProperty('display', 'none', 'important');
       for (const node of overlayCanvasCandidates('wireframe')) {
         try { node.getContext?.('2d')?.clearRect(0, 0, node.width, node.height); } catch (e) {}
@@ -1328,6 +1359,15 @@
     }
 
     const wantsVideo = mode === 'both' || mode === 'video';
+    // Entering a webcam view (from skeleton/off) always restarts the stream
+    // fresh, so a stale/dead <img> can never leave the pane black.
+    if (wantsVideo && !mocapVideoPrev) {
+      mocapCamPreviewOn = false;
+      mocapCamLastFrameAt = 0;
+      mocapCamClearSrc();
+    }
+    mocapVideoPrev = wantsVideo;
+
     if (wantsVideo) {
       mocapCamImg.style.setProperty('position', 'absolute', 'important');
       mocapCamImg.style.setProperty('left', vr.x + 'px', 'important');
@@ -1337,17 +1377,15 @@
       mocapCamImg.style.removeProperty('display');
       // Subscribe to the raw-frame pipe only while a webcam view is open. The
       // enable POST must complete before the <img> opens the stream, so chain
-      // the src onto it. If we already hold the subscription but the <img> lost
-      // its src (e.g. after a stop/restart), re-open it.
-      if (!mocapCamPreviewOn) {
+      // the src onto it. Re-assert the enable whenever the <img> has no src, so
+      // a flag/server desync can never render black forever.
+      if (!mocapCamHasSrc()) {
         mocapCamPreviewOn = true;
         setMocapCameraPreview(true).then(() => {
-          if (mocapCamImg && !mocapCamImg.src) {
+          if (mocapCamImg && !mocapCamHasSrc()) {
             mocapCamImg.src = '/__xra_camera.mjpg?t=' + Date.now();
           }
         });
-      } else if (!mocapCamImg.src) {
-        mocapCamImg.src = '/__xra_camera.mjpg?t=' + Date.now();
       }
     } else {
       // Skeleton-only / off: unsubscribe from the frame pipe so the backend
@@ -1357,7 +1395,7 @@
       mocapCamImg.style.setProperty('display', 'none', 'important');
       if (mocapCamPreviewOn) {
         mocapCamPreviewOn = false;
-        try { mocapCamImg.src = ''; } catch (e) {}
+        mocapCamClearSrc();
         setMocapCameraPreview(false);
       }
     }
@@ -2007,7 +2045,7 @@
       setMocapCameraPreview(false);
     }
     if (mocapCamImg) {
-      try { mocapCamImg.src = ''; } catch (e) {}
+      mocapCamClearSrc();
       mocapCamImg.style.setProperty('display', 'none', 'important');
     }
   });
